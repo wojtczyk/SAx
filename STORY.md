@@ -15,6 +15,14 @@ The variable **x** changes with the mission:
 
 For the current hackathon demo, **SAx = Search And Detect**.
 
+The prototype supports mission profiles that change which detections are treated as high priority and how the SITREP is phrased:
+
+- **SA-R**: Search And Rescue
+- **SA-D**: Search And Detect
+- **SA-T**: Search And Track
+- **SA-M**: Search And Map
+- **SA-P**: Search And Protect
+
 ## Mission
 
 SAx is an edge mission assistant for disconnected environments. When floods, earthquakes, hurricanes, or contested conditions knock out power, landlines, and cell service, SAx helps small teams search, detect, track, locate, and report what matters using local drones, sensors, and speech.

@@ -4,6 +4,8 @@ from collections import Counter, defaultdict
 from datetime import datetime
 from typing import Any
 
+from .profiles import MissionProfile
+
 
 VEHICLE_LABELS = {
     "bicycle",
@@ -44,14 +46,35 @@ def _format_notes(note_events: list[dict[str, Any]], limit: int = 3) -> str:
     return " ".join(f"{event['created_at']}: {event['summary']}" for event in recent_notes)
 
 
-def _assessment(object_events: list[dict[str, Any]], note_events: list[dict[str, Any]]) -> str:
+def _priority_events(
+    object_events: list[dict[str, Any]],
+    profile: MissionProfile,
+) -> list[dict[str, Any]]:
+    return [
+        event
+        for event in object_events
+        if profile.is_priority(str(event.get("metadata", {}).get("label", "")))
+    ]
+
+
+def _assessment(
+    object_events: list[dict[str, Any]],
+    note_events: list[dict[str, Any]],
+    profile: MissionProfile,
+) -> str:
     labels = [
         str(event.get("metadata", {}).get("label", "")).lower()
         for event in object_events
     ]
+    priority_events = _priority_events(object_events, profile)
     has_person = "person" in labels
     has_vehicle = any(label in VEHICLE_LABELS for label in labels)
 
+    if priority_events:
+        return (
+            f"{profile.name} priority activity detected. Focus areas: "
+            f"{profile.assessment_focus}."
+        )
     if has_person and has_vehicle:
         return "Human and vehicle activity detected in the current observation window."
     if has_person:
@@ -63,21 +86,20 @@ def _assessment(object_events: list[dict[str, Any]], note_events: list[dict[str,
     return "No notable activity recorded in the selected window."
 
 
-def _recommendation(object_events: list[dict[str, Any]]) -> str:
-    priority_labels = {"person", *VEHICLE_LABELS}
-    labels = {
-        str(event.get("metadata", {}).get("label", "")).lower()
-        for event in object_events
-    }
-    if labels & priority_labels:
-        return "Keep the sensor on the area of interest, capture one more frame, and add an operator note with location context."
+def _recommendation(
+    object_events: list[dict[str, Any]],
+    profile: MissionProfile,
+) -> str:
+    if _priority_events(object_events, profile):
+        return profile.recommendation
     return "Continue scanning and add an operator note if visual context changes."
 
 
-def generate_sitrep(events: list[dict[str, Any]]) -> str:
+def generate_sitrep(events: list[dict[str, Any]], profile: MissionProfile) -> str:
     if not events:
         return (
             f"SITREP generated {datetime.now().strftime('%H:%M:%S')}\n"
+            f"Mission profile: {profile.name} ({profile.code})\n"
             "Window: no timeline events available.\n"
             "Activity: no detections or operator notes recorded.\n"
             "Assessment: no notable activity recorded yet.\n"
@@ -104,14 +126,19 @@ def generate_sitrep(events: list[dict[str, Any]]) -> str:
         if object_events
         else "No object detections recorded."
     )
+    priority_count = len(_priority_events(object_events, profile))
 
     return "\n".join(
         [
             f"SITREP generated {datetime.now().strftime('%H:%M:%S')}",
+            f"Mission profile: {profile.name} ({profile.code})",
             f"Window: {first_seen} to {last_seen}",
-            f"Activity: {len(object_events)} object events. {label_summary}",
+            (
+                f"Activity: {len(object_events)} object events; "
+                f"{priority_count} {profile.detection_term} events. {label_summary}"
+            ),
             f"Operator notes: {_format_notes(note_events)}",
-            f"Assessment: {_assessment(object_events, note_events)}",
-            f"Recommended action: {_recommendation(object_events)}",
+            f"Assessment: {_assessment(object_events, note_events, profile)}",
+            f"Recommended action: {_recommendation(object_events, profile)}",
         ]
     )

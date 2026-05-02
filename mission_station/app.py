@@ -10,6 +10,7 @@ import streamlit as st
 
 from sax_station.detector import Detection, YoloDetector
 from sax_station.events import EventStore
+from sax_station.profiles import DEFAULT_PROFILE_NAME, MISSION_PROFILES, MissionProfile, get_profile
 from sax_station.sitrep import generate_sitrep
 from sax_station.speech import SpeechRecorder, TranscriptionUnavailable
 
@@ -24,6 +25,7 @@ def init_state() -> None:
     st.session_state.setdefault("last_logged_at", {})
     st.session_state.setdefault("camera_source", "0")
     st.session_state.setdefault("latest_sitrep", "")
+    st.session_state.setdefault("mission_profile", DEFAULT_PROFILE_NAME)
 
 
 def parse_source(raw: str) -> int | str:
@@ -31,8 +33,12 @@ def parse_source(raw: str) -> int | str:
     return int(value) if value.isdigit() else value
 
 
-def should_log(detection: Detection, cooldown_seconds: float = 3.0) -> bool:
-    key = detection.label
+def should_log(
+    detection: Detection,
+    profile: MissionProfile,
+    cooldown_seconds: float = 3.0,
+) -> bool:
+    key = f"{profile.code}:{detection.label}"
     now = time.time()
     last_logged_at = st.session_state.last_logged_at.get(key, 0.0)
     if now - last_logged_at < cooldown_seconds:
@@ -55,11 +61,14 @@ def render_timeline(store: EventStore) -> None:
         )
 
 
-def render_sitrep(store: EventStore) -> None:
+def render_sitrep(store: EventStore, profile: MissionProfile) -> None:
     st.subheader("SITREP")
     event_limit = st.slider("Events to summarize", 5, 100, 30, 5)
     if st.button("Generate SITREP", width="stretch"):
-        st.session_state.latest_sitrep = generate_sitrep(store.recent(limit=event_limit))
+        st.session_state.latest_sitrep = generate_sitrep(
+            store.recent(limit=event_limit),
+            profile,
+        )
 
     if st.session_state.latest_sitrep:
         st.text_area(
@@ -71,17 +80,32 @@ def render_sitrep(store: EventStore) -> None:
         st.caption("Generate a SITREP after capturing detections or notes.")
 
 
-def log_detections(store: EventStore, detections: list[Detection]) -> None:
+def log_detections(
+    store: EventStore,
+    detections: list[Detection],
+    profile: MissionProfile,
+) -> None:
     for detection in detections:
-        if should_log(detection):
+        if should_log(detection, profile):
+            is_priority = profile.is_priority(detection.label)
+            summary_prefix = "Priority" if is_priority else "Observed"
             store.add(
                 "object_detected",
-                f"{detection.label} detected ({detection.confidence:.0%})",
-                detection.as_metadata(),
+                f"{summary_prefix} {detection.label} detected ({detection.confidence:.0%})",
+                {
+                    **detection.as_metadata(),
+                    "mission_profile": profile.name,
+                    "mission_code": profile.code,
+                    "priority": is_priority,
+                },
             )
 
 
-def render_current_objects(slot, detections: list[Detection]) -> None:
+def render_current_objects(
+    slot,
+    detections: list[Detection],
+    profile: MissionProfile,
+) -> None:
     with slot.container():
         st.subheader("Current Objects")
         if not detections:
@@ -101,12 +125,16 @@ def render_current_objects(slot, detections: list[Detection]) -> None:
             confidences[detection.label].append(detection.confidence)
 
         for label, count in counts.most_common():
+            priority_marker = "priority" if profile.is_priority(label) else "observed"
             confidence_list = ", ".join(
                 f"{confidence:.0%}"
                 for confidence in sorted(confidences[label], reverse=True)[:5]
             )
             st.markdown(f"**{label}**")
-            st.write(f"{count} detection{'s' if count != 1 else ''} · best {max_confidence[label]:.0%}")
+            st.write(
+                f"{count} detection{'s' if count != 1 else ''} · "
+                f"best {max_confidence[label]:.0%} · {priority_marker}"
+            )
             st.caption(f"confidences: {confidence_list}")
 
 
@@ -115,6 +143,7 @@ def run_browser_snapshot_mode(
     detector: YoloDetector,
     model_name: str,
     confidence: float,
+    profile: MissionProfile,
     video_col,
     detections_slot,
 ) -> None:
@@ -124,7 +153,7 @@ def run_browser_snapshot_mode(
         photo = st.camera_input("Capture sensor frame")
 
     if photo is None:
-        render_current_objects(detections_slot, [])
+        render_current_objects(detections_slot, [], profile)
         return
 
     detector.load(model_name)
@@ -132,7 +161,7 @@ def run_browser_snapshot_mode(
     image_array = np.frombuffer(bytes_data, np.uint8)
     frame = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
     detections = detector.detect(frame, confidence)
-    log_detections(store, detections)
+    log_detections(store, detections, profile)
     annotated = detector.draw(frame, detections)
 
     with result_slot.container():
@@ -143,7 +172,7 @@ def run_browser_snapshot_mode(
             width="stretch",
         )
 
-    render_current_objects(detections_slot, detections)
+    render_current_objects(detections_slot, detections, profile)
 
 
 def open_capture(source: str) -> cv2.VideoCapture:
@@ -168,6 +197,21 @@ def main() -> None:
     st.title("SAx")
 
     with st.sidebar:
+        st.header("Mission")
+        profile_name = st.selectbox(
+            "Profile",
+            list(MISSION_PROFILES.keys()),
+            index=list(MISSION_PROFILES.keys()).index(
+                st.session_state.mission_profile
+                if st.session_state.mission_profile in MISSION_PROFILES
+                else DEFAULT_PROFILE_NAME
+            ),
+        )
+        st.session_state.mission_profile = profile_name
+        profile = get_profile(profile_name)
+        st.caption(profile.description)
+        st.caption(f"Priority labels: {', '.join(sorted(profile.priority_labels))}")
+
         st.header("Input")
         input_mode = st.radio(
             "Mode",
@@ -202,6 +246,7 @@ def main() -> None:
         if st.button("Clear timeline", width="stretch"):
             store.clear()
             st.session_state.last_logged_at = {}
+            st.session_state.latest_sitrep = ""
             st.rerun()
 
     video_col, intel_col = st.columns([2, 1])
@@ -229,7 +274,7 @@ def main() -> None:
             except Exception as exc:
                 st.error(f"Could not record/transcribe audio: {exc}")
 
-        render_sitrep(store)
+        render_sitrep(store, profile)
         render_timeline(store)
 
     if input_mode == "Browser snapshot":
@@ -238,6 +283,7 @@ def main() -> None:
             detector,
             model_name,
             confidence,
+            profile,
             video_col,
             detections_slot,
         )
@@ -271,11 +317,11 @@ def main() -> None:
         frame_index += 1
         if frame_index % frame_stride == 0:
             latest_detections = detector.detect(frame, confidence)
-            log_detections(store, latest_detections)
+            log_detections(store, latest_detections, profile)
 
         annotated = detector.draw(frame, latest_detections)
         frame_slot.image(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB), channels="RGB")
-        render_current_objects(detections_slot, latest_detections)
+        render_current_objects(detections_slot, latest_detections, profile)
 
         time.sleep(0.03)
 
