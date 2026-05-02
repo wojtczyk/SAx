@@ -1,2 +1,8 @@
 test/test-curl.sh
 test/test-py.py
+.venv/
+__pycache__/
+*.py[cod]
+.DS_Store
+mission_station/data/
+*.pt
