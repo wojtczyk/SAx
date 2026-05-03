@@ -631,6 +631,14 @@ def execute_operator_command(
         "reset_emergency",
         "emergency_land",
         "assisted_search",
+        "move_forward",
+        "move_back",
+        "move_left",
+        "move_right",
+        "move_up",
+        "move_down",
+        "yaw_left",
+        "yaw_right",
     }:
         execute_drone_action(store, parsed.intent, command_mode, drone_host)
         store.add(
@@ -697,6 +705,17 @@ def render_drone_controls(
     )
     battery_ok = battery_percent is not None and battery_percent >= 20
     emergency_active = drone_reports_emergency(snapshot)
+    telemetry_reports_flying = bool(
+        snapshot
+        and snapshot.get("ok")
+        and snapshot.get("drone_state") is not None
+        and snapshot["drone_state"] & DRONE_STATE_FLYING_MASK
+    )
+    airborne_state = current_state in {
+        DroneState.AIRBORNE,
+        DroneState.PAUSED,
+        DroneState.SCANNING,
+    } or telemetry_reports_flying
 
     st.markdown(
         (
@@ -748,9 +767,25 @@ def render_drone_controls(
         )
     else:
         takeoff_disabled = False
-    hover_disabled = real_mode and not control_ready
+    movement_disabled = (
+        not airborne_state
+        or (real_mode and (not control_ready or emergency_active or not battery_ok))
+    )
+    hover_disabled = (
+        not airborne_state
+        or (real_mode and (not control_ready or emergency_active))
+    )
     trim_disabled = real_mode and not control_ready
     land_disabled = real_mode and not control_ready
+
+    def nudge_button(label: str, action: str, column) -> None:
+        if column.button(
+            label,
+            width="stretch",
+            disabled=movement_disabled,
+            key=f"nudge_{action}",
+        ):
+            run_command(action)
 
     cols = st.columns(2)
     if cols[0].button(
@@ -768,6 +803,23 @@ def render_drone_controls(
     pause_label = "Hover" if real_mode else "Pause"
     if cols[1].button(pause_label, width="stretch", disabled=hover_disabled):
         run_command("pause")
+
+    st.caption("Nudge controls send short pulses, then hover.")
+    cols = st.columns(2)
+    nudge_button("Forward", "move_forward", cols[0])
+    nudge_button("Up", "move_up", cols[1])
+
+    cols = st.columns(2)
+    nudge_button("Left", "move_left", cols[0])
+    nudge_button("Right", "move_right", cols[1])
+
+    cols = st.columns(2)
+    nudge_button("Back", "move_back", cols[0])
+    nudge_button("Down", "move_down", cols[1])
+
+    cols = st.columns(2)
+    nudge_button("Yaw Left", "yaw_left", cols[0])
+    nudge_button("Yaw Right", "yaw_right", cols[1])
 
     if real_mode and st.button(
         "Clear Emergency",
@@ -789,7 +841,7 @@ def render_drone_controls(
     with st.form("operator_command_form", clear_on_submit=True):
         command_text = st.text_input(
             "Command",
-            placeholder="arm, takeoff, scan, sitrep, note possible survivor...",
+            placeholder="takeoff, hover, forward, yaw left, land...",
         )
         submitted = st.form_submit_button("Run Command", width="stretch")
 
@@ -804,7 +856,7 @@ def render_drone_controls(
         )
         st.rerun()
 
-    st.caption("Movement and scan remain disabled for real drone mode.")
+    st.caption("Scan and assisted search remain disabled for real drone mode.")
 
 
 def render_drone_diagnostics(store: EventStore):

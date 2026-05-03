@@ -19,6 +19,14 @@ DRONE_INTENTS = {
     "reset_emergency",
     "emergency_land",
     "assisted_search",
+    "move_forward",
+    "move_back",
+    "move_left",
+    "move_right",
+    "move_up",
+    "move_down",
+    "yaw_left",
+    "yaw_right",
 }
 
 
@@ -42,6 +50,22 @@ def parse_command(raw: str) -> ParsedCommand:
         return ParsedCommand("scan")
     if text in {"pause", "hold", "hover"}:
         return ParsedCommand("pause")
+    if text in {"forward", "move forward", "nudge forward", "front"}:
+        return ParsedCommand("move_forward")
+    if text in {"back", "backward", "move back", "move backward", "nudge back"}:
+        return ParsedCommand("move_back")
+    if text in {"left", "strafe left", "move left", "nudge left"}:
+        return ParsedCommand("move_left")
+    if text in {"right", "strafe right", "move right", "nudge right"}:
+        return ParsedCommand("move_right")
+    if text in {"up", "ascend", "move up", "nudge up"}:
+        return ParsedCommand("move_up")
+    if text in {"down", "descend", "move down", "nudge down"}:
+        return ParsedCommand("move_down")
+    if text in {"yaw left", "turn left", "rotate left", "spin left"}:
+        return ParsedCommand("yaw_left")
+    if text in {"yaw right", "turn right", "rotate right", "spin right"}:
+        return ParsedCommand("yaw_right")
     if text in {"flat trim", "flat_trim", "trim", "calibrate"}:
         return ParsedCommand("flat_trim")
     if text in {"clear emergency", "reset emergency", "reset drone", "clear error"}:

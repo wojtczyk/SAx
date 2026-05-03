@@ -42,6 +42,23 @@ def command(current_state: DroneState, action: str) -> DroneCommandResult:
             return DroneCommandResult(current_state, "Pause ignored: drone simulation is not airborne.")
         return DroneCommandResult(DroneState.PAUSED, "Simulated drone paused in hover.")
 
+    if action in {
+        "move_forward",
+        "move_back",
+        "move_left",
+        "move_right",
+        "move_up",
+        "move_down",
+        "yaw_left",
+        "yaw_right",
+    }:
+        if current_state not in {DroneState.AIRBORNE, DroneState.PAUSED, DroneState.SCANNING}:
+            return DroneCommandResult(current_state, "Movement blocked: drone simulation must be airborne.")
+        return DroneCommandResult(
+            current_state,
+            f"Simulated {action.replace('_', ' ')} nudge.",
+        )
+
     if action == "land":
         if current_state in {DroneState.DISARMED, DroneState.ARMED}:
             return DroneCommandResult(DroneState.DISARMED, "Land ignored: drone simulation is not airborne.")

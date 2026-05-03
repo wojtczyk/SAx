@@ -14,6 +14,11 @@ NAVDATA_PORT = 5554
 CONTROL_PORT = 5556
 NAVDATA_HEADER = 0x55667788
 NAVDATA_DEMO_TAG = 0
+NUDGE_SPEED = 0.08
+NUDGE_VERTICAL_SPEED = 0.18
+NUDGE_YAW_SPEED = 0.22
+NUDGE_REPEAT = 7
+NUDGE_INTERVAL_SECONDS = 0.03
 REF_LAND = 290717696
 REF_TAKEOFF = 290718208
 REF_EMERGENCY = 290717952
@@ -41,6 +46,10 @@ def next_at_sequence() -> int:
         sequence = _NEXT_SEQUENCE
         _NEXT_SEQUENCE += 1
         return sequence
+
+
+def float_arg(value: float) -> int:
+    return struct.unpack("<i", struct.pack("<f", float(value)))[0]
 
 
 @dataclass(frozen=True)
@@ -179,6 +188,64 @@ class ARDroneATClient:
                 ]
             )
             time.sleep(interval_seconds)
+
+    def move(
+        self,
+        *,
+        roll: float = 0.0,
+        pitch: float = 0.0,
+        gaz: float = 0.0,
+        yaw: float = 0.0,
+        repeat: int = NUDGE_REPEAT,
+        interval_seconds: float = NUDGE_INTERVAL_SECONDS,
+        hover_after: bool = True,
+    ) -> None:
+        for _ in range(repeat):
+            self._send(
+                [
+                    self._command(
+                        "PCMD",
+                        1,
+                        float_arg(roll),
+                        float_arg(pitch),
+                        float_arg(gaz),
+                        float_arg(yaw),
+                    ),
+                    self._command("COMWDG"),
+                ]
+            )
+            time.sleep(interval_seconds)
+
+        if hover_after:
+            self.hover(repeat=4, interval_seconds=interval_seconds)
+
+    def nudge(self, action: str) -> None:
+        if action == "move_forward":
+            self.move(pitch=-NUDGE_SPEED)
+            return
+        if action == "move_back":
+            self.move(pitch=NUDGE_SPEED)
+            return
+        if action == "move_left":
+            self.move(roll=-NUDGE_SPEED)
+            return
+        if action == "move_right":
+            self.move(roll=NUDGE_SPEED)
+            return
+        if action == "move_up":
+            self.move(gaz=NUDGE_VERTICAL_SPEED)
+            return
+        if action == "move_down":
+            self.move(gaz=-NUDGE_VERTICAL_SPEED)
+            return
+        if action == "yaw_left":
+            self.move(yaw=-NUDGE_YAW_SPEED)
+            return
+        if action == "yaw_right":
+            self.move(yaw=NUDGE_YAW_SPEED)
+            return
+
+        raise ValueError(f"unknown nudge action: {action}")
 
     def land(self, repeat: int = 30, interval_seconds: float = 0.03) -> None:
         for _ in range(repeat):
@@ -398,6 +465,16 @@ def send_real_drone_command(
     host: str,
     action: str,
 ) -> RealDroneCommandResult:
+    nudge_actions = {
+        "move_forward",
+        "move_back",
+        "move_left",
+        "move_right",
+        "move_up",
+        "move_down",
+        "yaw_left",
+        "yaw_right",
+    }
     if action not in {
         "flat_trim",
         "takeoff",
@@ -405,12 +482,13 @@ def send_real_drone_command(
         "land",
         "emergency_land",
         "reset_emergency",
+        *nudge_actions,
     }:
         return RealDroneCommandResult(
             False,
             f"Drone command blocked: {action.replace('_', ' ')} is not enabled yet.",
             action,
-            "Only flat trim, clear emergency, takeoff, hover, land, and emergency stop are enabled in real mode.",
+            "Only flat trim, clear emergency, takeoff, hover, nudge movement, land, and emergency stop are enabled in real mode.",
             event_kind="drone_real_command_blocked",
         )
 
@@ -439,6 +517,14 @@ def send_real_drone_command(
                 "Drone hover command sent.",
                 action,
                 "AT*PCMD zero-motion hover command repeated on UDP 5556.",
+            )
+        if action in nudge_actions:
+            client.nudge(action)
+            return RealDroneCommandResult(
+                True,
+                f"Drone {action.replace('_', ' ')} nudge sent.",
+                action,
+                "Short AT*PCMD movement pulse sent on UDP 5556, followed by zero-motion hover.",
             )
         if action == "land":
             client.land()
