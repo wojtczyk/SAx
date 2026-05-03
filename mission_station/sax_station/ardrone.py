@@ -136,9 +136,37 @@ class ARDroneATClient:
     def flat_trim(self) -> None:
         self._send([self._command("FTRIM")])
 
+    def takeoff(self, repeat: int = 18, interval_seconds: float = 0.03) -> None:
+        self.init_navdata(repeat=1)
+        self.flat_trim()
+        for _ in range(repeat):
+            self._send(
+                [
+                    self._command("REF", REF_TAKEOFF),
+                    self._command("COMWDG"),
+                ]
+            )
+            time.sleep(interval_seconds)
+        self.hover(repeat=8)
+
+    def hover(self, repeat: int = 10, interval_seconds: float = 0.03) -> None:
+        for _ in range(repeat):
+            self._send(
+                [
+                    self._command("PCMD", 0, 0, 0, 0, 0),
+                    self._command("COMWDG"),
+                ]
+            )
+            time.sleep(interval_seconds)
+
     def land(self, repeat: int = 12, interval_seconds: float = 0.03) -> None:
         for _ in range(repeat):
-            self._send([self._command("REF", REF_LAND)])
+            self._send(
+                [
+                    self._command("REF", REF_LAND),
+                    self._command("COMWDG"),
+                ]
+            )
             time.sleep(interval_seconds)
 
     def emergency_stop(self) -> None:
@@ -339,12 +367,12 @@ def send_real_drone_command(
     host: str,
     action: str,
 ) -> RealDroneCommandResult:
-    if action not in {"flat_trim", "land", "emergency_land"}:
+    if action not in {"flat_trim", "takeoff", "pause", "land", "emergency_land"}:
         return RealDroneCommandResult(
             False,
-            f"Real AR.Drone command blocked: {action.replace('_', ' ')} is not enabled yet.",
+            f"Drone command blocked: {action.replace('_', ' ')} is not enabled yet.",
             action,
-            "Only flat trim, land, and emergency stop are enabled in real mode.",
+            "Only flat trim, guarded takeoff, hover, land, and emergency stop are enabled in real mode.",
             event_kind="drone_real_command_blocked",
         )
 
@@ -354,15 +382,31 @@ def send_real_drone_command(
             client.flat_trim()
             return RealDroneCommandResult(
                 True,
-                "Real AR.Drone flat trim sent.",
+                "Drone flat trim sent.",
                 action,
                 "AT*FTRIM sent on UDP 5556. Drone should be stationary and on level ground.",
+            )
+        if action == "takeoff":
+            client.takeoff()
+            return RealDroneCommandResult(
+                True,
+                "Drone takeoff command sent.",
+                action,
+                "AT*REF takeoff was repeated on UDP 5556, followed by zero-motion hover commands.",
+            )
+        if action == "pause":
+            client.hover()
+            return RealDroneCommandResult(
+                True,
+                "Drone hover command sent.",
+                action,
+                "AT*PCMD zero-motion hover command repeated on UDP 5556.",
             )
         if action == "land":
             client.land()
             return RealDroneCommandResult(
                 True,
-                "Real AR.Drone land command sent.",
+                "Drone land command sent.",
                 action,
                 "AT*REF land command repeated on UDP 5556.",
             )
@@ -370,7 +414,7 @@ def send_real_drone_command(
         client.emergency_stop()
         return RealDroneCommandResult(
             True,
-            "Real AR.Drone emergency stop sent.",
+            "Drone emergency stop sent.",
             action,
             "AT*REF emergency sequence sent. This cuts motors and may cause a crash if airborne.",
             event_kind="drone_real_emergency",
@@ -378,7 +422,7 @@ def send_real_drone_command(
     except OSError as exc:
         return RealDroneCommandResult(
             False,
-            f"Real AR.Drone command failed: {action.replace('_', ' ')}.",
+            f"Drone command failed: {action.replace('_', ' ')}.",
             action,
             str(exc),
             event_kind="drone_real_command_failed",

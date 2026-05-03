@@ -176,6 +176,13 @@ def init_state() -> None:
     st.session_state.setdefault("drone_host", DEFAULT_DRONE_HOST)
     st.session_state.setdefault("drone_command_mode", "Simulation")
     st.session_state.setdefault("last_navdata_auto_at", 0.0)
+    st.session_state.setdefault("drone_video_capture", None)
+    st.session_state.setdefault("drone_video_source", "")
+    st.session_state.setdefault("drone_video_frame_index", 0)
+    st.session_state.setdefault("latest_detections", [])
+    st.session_state.setdefault("enable_real_takeoff", False)
+    if st.session_state.drone_command_mode not in {"Simulation", "Drone"}:
+        st.session_state.drone_command_mode = "Drone"
 
 
 def parse_source(raw: str) -> int | str:
@@ -444,10 +451,17 @@ def execute_drone_action(
 ) -> None:
     if command_mode == "Drone":
         result = send_real_drone_command(drone_host, action)
+        if action == "takeoff" and result.ok:
+            st.session_state.drone_state = DroneState.AIRBORNE.value
+            st.session_state.enable_real_takeoff = False
+        if action == "pause" and result.ok:
+            st.session_state.drone_state = DroneState.PAUSED.value
         if action == "land" and result.ok:
             st.session_state.drone_state = DroneState.DISARMED.value
+            st.session_state.enable_real_takeoff = False
         if action == "emergency_land" and result.ok:
             st.session_state.drone_state = DroneState.EMERGENCY.value
+            st.session_state.enable_real_takeoff = False
         store.add(
             result.event_kind,
             result.summary,
@@ -556,35 +570,69 @@ def render_drone_controls(
         horizontal=True,
     )
     real_mode = command_mode == "Drone"
+    probe = st.session_state.get("drone_probe") or {}
+    control_ready = bool(probe.get("ready_for_control"))
+    snapshot = current_navdata_snapshot()
+    battery_percent = (
+        snapshot.get("battery_percent")
+        if snapshot and snapshot.get("ok")
+        else None
+    )
+    battery_ok = battery_percent is not None and battery_percent >= 20
+
     st.caption("Simulation state")
     st.markdown(
         f'<div class="sax-control-state">{escape(current_state.value)}</div>',
         unsafe_allow_html=True,
     )
     if real_mode:
-        st.warning("Real mode only enables Flat Trim, Land, and Emergency Stop.")
+        st.warning("Drone mode can spin motors. Keep clear and keep Emergency Stop visible.")
+        st.checkbox(
+            "Enable guarded takeoff",
+            key="enable_real_takeoff",
+            disabled=not control_ready or not battery_ok,
+        )
+        if not control_ready:
+            st.caption("Probe Drone before enabling takeoff or hover.")
+        if battery_percent is None:
+            st.caption("Takeoff requires live battery telemetry.")
+        elif not battery_ok:
+            st.caption("Takeoff requires at least 20% battery.")
 
     def run_command(action: str) -> None:
         execute_drone_action(store, action, command_mode, drone_host)
         st.rerun()
 
+    if real_mode:
+        takeoff_disabled = (
+            not st.session_state.enable_real_takeoff
+            or not control_ready
+            or not battery_ok
+        )
+    else:
+        takeoff_disabled = False
+    hover_disabled = real_mode and not control_ready
+    trim_disabled = real_mode and not control_ready
+    land_disabled = real_mode and not control_ready
+
     cols = st.columns(2)
     if cols[0].button("Arm", width="stretch", disabled=real_mode):
         run_command("arm")
-    if cols[1].button("Takeoff", width="stretch", disabled=real_mode):
+    if cols[1].button("Takeoff", width="stretch", disabled=takeoff_disabled):
         run_command("takeoff")
 
     cols = st.columns(2)
     if cols[0].button("Scan", width="stretch", disabled=real_mode):
         run_command("scan")
-    if cols[1].button("Pause", width="stretch", disabled=real_mode):
+    pause_label = "Hover" if real_mode else "Pause"
+    if cols[1].button(pause_label, width="stretch", disabled=hover_disabled):
         run_command("pause")
 
-    if st.button("Flat Trim", width="stretch"):
+    if st.button("Flat Trim", width="stretch", disabled=trim_disabled):
         run_command("flat_trim")
 
     cols = st.columns(2)
-    if cols[0].button("Land", width="stretch"):
+    if cols[0].button("Land", width="stretch", disabled=land_disabled):
         run_command("land")
     if cols[1].button("Emergency Stop", width="stretch"):
         run_command("emergency_land")
@@ -611,7 +659,7 @@ def render_drone_controls(
         )
         st.rerun()
 
-    st.caption("Real takeoff and movement stay disabled until safe command tests pass.")
+    st.caption("Movement and scan remain disabled for real drone mode.")
 
 
 def render_drone_diagnostics(store: EventStore):
@@ -662,7 +710,7 @@ def render_drone_diagnostics(store: EventStore):
             st.write(f"{status} · {probe['name']} · {probe['detail']}")
 
         if result["ready_for_video"]:
-            st.success("Video port is open. Switch to Server video source and press Start.")
+            st.success("Video port is open. Switch to Drone video and press Start.")
         else:
             st.warning("Connect Mac Wi-Fi to the AR.Drone network, then probe again.")
 
@@ -756,7 +804,7 @@ def render_current_objects(
     )
 
 
-def run_browser_snapshot_mode(
+def run_webcam_mode(
     store: EventStore,
     detector: YoloDetector,
     model_name: str,
@@ -768,7 +816,7 @@ def run_browser_snapshot_mode(
 ) -> None:
     render_status_strip(status_slot, st.session_state.camera_source, model_name, [])
     with frame_slot.container():
-        st.info("macOS grants camera access to the browser for this mode.")
+        st.info("macOS grants camera access to the browser for Webcam mode.")
         result_slot = st.empty()
         photo = st.camera_input("Capture sensor frame")
 
@@ -807,6 +855,87 @@ def open_capture(source: str) -> cv2.VideoCapture:
     return cv2.VideoCapture(parsed_source)
 
 
+def release_drone_video_capture() -> None:
+    capture = st.session_state.get("drone_video_capture")
+    if capture is not None:
+        capture.release()
+    st.session_state.drone_video_capture = None
+    st.session_state.drone_video_source = ""
+    st.session_state.drone_video_frame_index = 0
+
+
+def drone_video_capture_for(source: str) -> cv2.VideoCapture:
+    capture = st.session_state.get("drone_video_capture")
+    if capture is not None and st.session_state.drone_video_source == source:
+        return capture
+
+    release_drone_video_capture()
+    capture = open_capture(source)
+    st.session_state.drone_video_capture = capture
+    st.session_state.drone_video_source = source
+    st.session_state.drone_video_frame_index = 0
+    st.session_state.latest_detections = []
+    return capture
+
+
+@st.fragment(run_every=0.05)
+def render_drone_video_fragment(
+    store: EventStore,
+    detector: YoloDetector,
+    source: str,
+    model_name: str,
+    confidence: float,
+    frame_stride: int,
+    profile: MissionProfile,
+    status_slot,
+    frame_slot,
+    detections_slot,
+    telemetry_slot,
+) -> None:
+    if not st.session_state.running:
+        release_drone_video_capture()
+        render_status_strip(status_slot, source, model_name, [])
+        frame_slot.info("Press Start to open the video source.")
+        render_current_objects(detections_slot, [], profile)
+        return
+
+    detector.load(model_name)
+    capture = drone_video_capture_for(source)
+    if not capture.isOpened():
+        frame_slot.error(
+            f"Could not open video source: {source}\n\n"
+            "On macOS, OpenCV needs camera permission for the app that launched Python. "
+            "For webcam testing, use Webcam mode. For the AR.Drone, keep using "
+            "Drone video with tcp://192.168.1.1:5555."
+        )
+        st.session_state.running = False
+        release_drone_video_capture()
+        return
+
+    ok, frame = capture.read()
+    if not ok:
+        frame_slot.warning("No frame received from video source.")
+        render_status_strip(
+            status_slot,
+            source,
+            model_name,
+            st.session_state.latest_detections,
+        )
+        return
+
+    st.session_state.drone_video_frame_index += 1
+    if st.session_state.drone_video_frame_index % frame_stride == 0:
+        st.session_state.latest_detections = detector.detect(frame, confidence)
+        log_detections(store, st.session_state.latest_detections, profile)
+
+    latest_detections = st.session_state.latest_detections
+    annotated = detector.draw(frame, latest_detections)
+    frame_slot.image(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB), channels="RGB")
+    maybe_auto_refresh_navdata(telemetry_slot, source, st.session_state.drone_host)
+    render_status_strip(status_slot, source, model_name, latest_detections)
+    render_current_objects(detections_slot, latest_detections, profile)
+
+
 def main() -> None:
     st.set_page_config(page_title="SAx", layout="wide")
     apply_compact_layout()
@@ -834,12 +963,26 @@ def main() -> None:
         st.caption(profile.description)
         st.caption(f"Priority labels: {', '.join(sorted(profile.priority_labels))}")
 
+        st.header("Controls")
+        cols = st.columns(2)
+        if cols[0].button("Start", width="stretch"):
+            st.session_state.running = True
+        if cols[1].button("Stop", width="stretch"):
+            st.session_state.running = False
+            release_drone_video_capture()
+
+        if st.button("Clear timeline", width="stretch"):
+            store.clear()
+            st.session_state.last_logged_at = {}
+            st.session_state.latest_sitrep = ""
+            st.rerun()
+
         st.header("Input")
         input_mode = st.radio(
             "Mode",
-            ["Browser snapshot", "Server video source"],
+            ["Webcam", "Drone video"],
             help=(
-                "Browser snapshot uses browser camera permission. Server video source "
+                "Webcam uses browser camera permission. Drone video "
                 "uses OpenCV and is better for drone/video streams."
             ),
         )
@@ -857,19 +1000,6 @@ def main() -> None:
         )
         confidence = st.slider("Confidence threshold", 0.1, 0.9, 0.35, 0.05)
         frame_stride = st.slider("Detect every N frames", 1, 10, 3, 1)
-
-        st.header("Controls")
-        cols = st.columns(2)
-        if cols[0].button("Start", width="stretch"):
-            st.session_state.running = True
-        if cols[1].button("Stop", width="stretch"):
-            st.session_state.running = False
-
-        if st.button("Clear timeline", width="stretch"):
-            store.clear()
-            st.session_state.last_logged_at = {}
-            st.session_state.latest_sitrep = ""
-            st.rerun()
 
     video_col, intel_col = st.columns([2, 1])
     with video_col:
@@ -924,8 +1054,8 @@ def main() -> None:
         with st.expander("Mission Timeline", expanded=False):
             render_timeline(store, show_title=False)
 
-    if input_mode == "Browser snapshot":
-        run_browser_snapshot_mode(
+    if input_mode == "Webcam":
+        run_webcam_mode(
             store,
             detector,
             model_name,
@@ -938,47 +1068,21 @@ def main() -> None:
         return
 
     if not st.session_state.running:
-        render_status_strip(status_slot, source, model_name, [])
-        frame_slot.info("Press Start to open the video source.")
-        render_current_objects(detections_slot, [], profile)
-        return
+        release_drone_video_capture()
 
-    detector.load(model_name)
-    capture = open_capture(source)
-    if not capture.isOpened():
-        frame_slot.error(
-            f"Could not open video source: {source}\n\n"
-            "On macOS, OpenCV needs camera permission for the app that launched Python. "
-            "For webcam testing, use Browser snapshot mode. For the AR.Drone, keep using "
-            "Server video source with tcp://192.168.1.1:5555."
-        )
-        st.session_state.running = False
-        return
-
-    frame_index = 0
-    latest_detections: list[Detection] = []
-
-    while st.session_state.running:
-        ok, frame = capture.read()
-        if not ok:
-            frame_slot.warning("No frame received from video source.")
-            break
-
-        frame_index += 1
-        if frame_index % frame_stride == 0:
-            latest_detections = detector.detect(frame, confidence)
-            log_detections(store, latest_detections, profile)
-
-        annotated = detector.draw(frame, latest_detections)
-        frame_slot.image(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB), channels="RGB")
-        maybe_auto_refresh_navdata(telemetry_slot, source, st.session_state.drone_host)
-        render_status_strip(status_slot, source, model_name, latest_detections)
-        render_current_objects(detections_slot, latest_detections, profile)
-
-        time.sleep(0.03)
-
-    capture.release()
-    st.session_state.running = False
+    render_drone_video_fragment(
+        store,
+        detector,
+        source,
+        model_name,
+        confidence,
+        frame_stride,
+        profile,
+        status_slot,
+        frame_slot,
+        detections_slot,
+        telemetry_slot,
+    )
 
 
 if __name__ == "__main__":

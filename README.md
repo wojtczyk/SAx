@@ -46,37 +46,37 @@ Connect the Mac to the AR.Drone Wi-Fi network, then run:
 python scripts/drone_probe.py
 ```
 
-If the video probe succeeds, use this source in the app with **Server video source** mode:
+If the video probe succeeds, use this source in the app with **Drone video** mode:
 
 ```text
 tcp://192.168.1.1:5555
 ```
 
-The AR.Drone Link panel can also read battery level and altitude from navdata on UDP `5554`.
+The Drone Link panel can also read battery level and altitude from navdata on UDP `5554`.
 
 ## AR.Drone Command Safety
 
 The app includes a **Command mode** selector in the Drone Control panel:
 
 - **Simulation**: all drone actions are logged only as simulated events.
-- **Real AR.Drone**: only `Flat Trim`, `Land`, and `Emergency Stop` are enabled.
+- **Drone**: enables `Flat Trim`, guarded `Takeoff`, `Hover`, `Land`, and `Emergency Stop`.
 
-Real takeoff, movement, and assisted search remain disabled until the command path is proven safe. `Emergency Stop` sends the AR.Drone emergency motor-cut sequence and can cause a crash if the drone is airborne.
+Movement and assisted search remain disabled in Drone mode until hover and landing are proven safe. `Emergency Stop` sends the AR.Drone emergency motor-cut sequence and can cause a crash if the drone is airborne.
 
 ## macOS Camera Notes
 
 The app has two input modes:
 
-- **Browser snapshot**: Uses Streamlit's browser camera widget. This is the easiest way to test YOLO on a Mac because camera permission is granted to the browser.
-- **Server video source**: Uses OpenCV from the Python process. Use this for video files, network streams, and AR.Drone experiments.
+- **Webcam**: Uses Streamlit's browser camera widget. This is the easiest way to test YOLO on a Mac because camera permission is granted to the browser.
+- **Drone video**: Uses OpenCV from the Python process. Use this for video files, network streams, and AR.Drone experiments.
 
-If `Server video source` with `0` shows:
+If `Drone video` with `0` shows:
 
 ```text
 Could not open video source: 0
 ```
 
-macOS probably denied camera access to the Python process. For webcam testing, switch to `Browser snapshot` mode. If you need live webcam capture through OpenCV, run Streamlit from Terminal or iTerm and grant camera permission to that app:
+macOS probably denied camera access to the Python process. For webcam testing, switch to `Webcam` mode. If you need live webcam capture through OpenCV, run Streamlit from Terminal or iTerm and grant camera permission to that app:
 
 ```bash
 cd ~/sax
