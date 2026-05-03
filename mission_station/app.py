@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 import streamlit as st
 
+from sax_station.ardrone import DEFAULT_DRONE_HOST, probe_drone, video_source_url
 from sax_station.commands import ParsedCommand, parse_command
 from sax_station.detector import Detection, YoloDetector
 from sax_station.drone import DroneState, assisted_search_sequence, command
@@ -269,6 +270,56 @@ def render_drone_controls(store: EventStore, profile: MissionProfile) -> None:
     st.caption("Simulation only. Real AR.Drone commands will be wired after video/control tests.")
 
 
+def render_drone_diagnostics(store: EventStore) -> None:
+    st.subheader("AR.Drone Link")
+    drone_host = st.text_input("Drone host", value=DEFAULT_DRONE_HOST)
+    st.caption(f"Video source: `{video_source_url(drone_host)}`")
+
+    if st.button("Probe AR.Drone", width="stretch"):
+        result = probe_drone(drone_host)
+        st.session_state.drone_probe = {
+            "host": result["host"],
+            "local_address": result["local_address"],
+            "likely_on_drone_network": result["likely_on_drone_network"],
+            "video_source": result["video_source"],
+            "video": result["video"].__dict__,
+            "navdata": result["navdata"].__dict__,
+            "control": result["control"].__dict__,
+            "ready_for_video": result["ready_for_video"],
+            "ready_for_control": result["ready_for_control"],
+        }
+        store.add(
+            "drone_probe",
+            (
+                "AR.Drone probe: "
+                f"video={'ready' if result['ready_for_video'] else 'not ready'}, "
+                f"control={'ready' if result['ready_for_control'] else 'not ready'}"
+            ),
+            st.session_state.drone_probe,
+        )
+        if result["ready_for_video"]:
+            st.session_state.camera_source = result["video_source"]
+        st.rerun()
+
+    result = st.session_state.get("drone_probe")
+    if not result:
+        return
+
+    st.write(f"Local route address: `{result['local_address']}`")
+    if not result["likely_on_drone_network"]:
+        st.warning("Mac does not appear to be on the AR.Drone Wi-Fi network.")
+
+    for key in ["video", "navdata", "control"]:
+        probe = result[key]
+        status = "OK" if probe["ok"] else "FAIL"
+        st.write(f"{status} · {probe['name']} · {probe['detail']}")
+
+    if result["ready_for_video"]:
+        st.success("Video port is open. Switch to Server video source and press Start.")
+    else:
+        st.warning("Connect Mac Wi-Fi to the AR.Drone network, then probe again.")
+
+
 def log_detections(
     store: EventStore,
     detections: list[Detection],
@@ -295,6 +346,7 @@ def render_current_objects(
     detections: list[Detection],
     profile: MissionProfile,
 ) -> None:
+    slot.empty()
     with slot.container():
         st.subheader("Current Objects")
         if not detections:
@@ -446,6 +498,7 @@ def main() -> None:
     detections_slot = intel_col.empty()
 
     with intel_col:
+        render_drone_diagnostics(store)
         render_drone_controls(store, profile)
 
         st.subheader("Operator Notes")

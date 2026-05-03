@@ -38,6 +38,20 @@ brew install python@3.12
 streamlit run mission_station/app.py
 ```
 
+## AR.Drone Probe
+
+Connect the Mac to the AR.Drone Wi-Fi network, then run:
+
+```bash
+python scripts/drone_probe.py
+```
+
+If the video probe succeeds, use this source in the app with **Server video source** mode:
+
+```text
+tcp://192.168.1.1:5555
+```
+
 ## macOS Camera Notes
 
 The app has two input modes:
