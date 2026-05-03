@@ -157,10 +157,52 @@ def apply_compact_layout() -> None:
         }
 
         .sax-control-state {
-            font-size: 1.05rem;
+            font-size: 0.82rem;
             font-weight: 700;
             line-height: 1.1;
-            margin: -0.25rem 0 0.4rem 0;
+            margin: 0;
+        }
+
+        .sax-control-heading {
+            font-size: 1.05rem;
+            font-weight: 750;
+            margin: 0 !important;
+            line-height: 1.1;
+        }
+
+        .sax-control-status {
+            display: flex;
+            align-items: baseline;
+            gap: 0.45rem;
+            margin: 0.25rem 0 0.45rem 0;
+            font-size: 0.78rem;
+            opacity: 0.82;
+        }
+
+        .sax-compact-warning {
+            border-left: 3px solid #f2cc60;
+            border-radius: 4px;
+            background: rgba(242, 204, 96, 0.16);
+            padding: 0.3rem 0.5rem;
+            margin: 0.28rem 0 0.35rem 0;
+            font-size: 0.78rem;
+            line-height: 1.2;
+        }
+
+        .sax-compact-error {
+            border-left: 3px solid #ff6b6b;
+            border-radius: 4px;
+            background: rgba(255, 107, 107, 0.16);
+            padding: 0.3rem 0.5rem;
+            margin: 0.28rem 0 0.35rem 0;
+            font-size: 0.78rem;
+            line-height: 1.2;
+        }
+
+        .sax-compact-hint {
+            font-size: 0.78rem;
+            opacity: 0.72;
+            margin: 0.18rem 0;
         }
         </style>
         """,
@@ -184,15 +226,10 @@ def init_state() -> None:
     st.session_state.setdefault("drone_video_missed_frames", 0)
     st.session_state.setdefault("last_drone_panel_refresh_at", 0.0)
     st.session_state.setdefault("latest_detections", [])
-    st.session_state.setdefault("enable_real_takeoff_checkbox", False)
-    st.session_state.setdefault("reset_real_takeoff_checkbox", False)
     st.session_state.setdefault("webcam_photo_bytes", None)
     st.session_state.setdefault("webcam_capture_key", 0)
     if st.session_state.drone_command_mode not in {"Simulation", "Drone"}:
         st.session_state.drone_command_mode = "Drone"
-    if st.session_state.reset_real_takeoff_checkbox:
-        st.session_state.enable_real_takeoff_checkbox = False
-        st.session_state.reset_real_takeoff_checkbox = False
 
 
 def parse_source(raw: str) -> int | str:
@@ -419,7 +456,6 @@ def render_navdata_snapshot(slot, snapshot: dict | None) -> None:
 def render_status_strip(
     slot,
     source: str,
-    model_name: str,
     detections: list[Detection],
 ) -> None:
     result = st.session_state.get("drone_probe")
@@ -434,7 +470,6 @@ def render_status_strip(
         ("Battery", readings["battery"]),
         ("Altitude", readings["altitude"]),
         ("Video", video_status),
-        ("YOLO", model_name),
         ("Objects", object_status),
     ]
     pill_html = "".join(
@@ -485,15 +520,12 @@ def execute_drone_action(
         store_navdata_snapshot(snapshot_after)
         if action == "takeoff" and result.ok:
             st.session_state.drone_state = DroneState.AIRBORNE.value
-            st.session_state.reset_real_takeoff_checkbox = True
         if action == "pause" and result.ok:
             st.session_state.drone_state = DroneState.PAUSED.value
         if action == "land" and result.ok:
             st.session_state.drone_state = DroneState.DISARMED.value
-            st.session_state.reset_real_takeoff_checkbox = True
         if action == "emergency_land" and result.ok:
             st.session_state.drone_state = DroneState.EMERGENCY.value
-            st.session_state.reset_real_takeoff_checkbox = True
         if action == "reset_emergency" and result.ok:
             st.session_state.drone_state = DroneState.DISARMED.value
         store.add(
@@ -597,14 +629,22 @@ def render_drone_controls(
     profile: MissionProfile,
     drone_host: str,
 ) -> None:
-    st.subheader("Drone Control")
     current_state = DroneState(st.session_state.drone_state)
-    command_mode = st.radio(
-        "Command mode",
-        ["Simulation", "Drone"],
-        key="drone_command_mode",
-        horizontal=True,
-    )
+    header_cols = st.columns([1.15, 2.35], vertical_alignment="center")
+    with header_cols[0]:
+        st.markdown(
+            '<h3 class="sax-control-heading">Drone Control</h3>',
+            unsafe_allow_html=True,
+        )
+    with header_cols[1]:
+        command_mode = st.radio(
+            "Command mode",
+            ["Simulation", "Drone"],
+            key="drone_command_mode",
+            horizontal=True,
+            label_visibility="collapsed",
+        )
+
     real_mode = command_mode == "Drone"
     probe = st.session_state.get("drone_probe") or {}
     control_ready = bool(probe.get("ready_for_control"))
@@ -617,26 +657,37 @@ def render_drone_controls(
     battery_ok = battery_percent is not None and battery_percent >= 20
     emergency_active = drone_reports_emergency(snapshot)
 
-    st.caption("Simulation state")
     st.markdown(
-        f'<div class="sax-control-state">{escape(current_state.value)}</div>',
+        (
+            '<div class="sax-control-status">'
+            '<span>State</span>'
+            f'<span class="sax-control-state">{escape(current_state.value)}</span>'
+            "</div>"
+        ),
         unsafe_allow_html=True,
     )
     if real_mode:
-        st.warning("Drone mode can spin motors. Keep clear and keep Emergency Stop visible.")
-        st.checkbox(
-            "Enable guarded takeoff",
-            key="enable_real_takeoff_checkbox",
-            disabled=not control_ready or not battery_ok,
+        st.markdown(
+            '<div class="sax-compact-warning">Drone mode can spin motors. Keep clear.</div>',
+            unsafe_allow_html=True,
         )
+        guard_hints = []
         if not control_ready:
-            st.caption("Probe Drone before enabling takeoff or hover.")
+            guard_hints.append("Probe Drone before takeoff or hover.")
         if emergency_active:
-            st.error("Drone reports emergency state. Clear Emergency before takeoff.")
+            st.markdown(
+                '<div class="sax-compact-error">Drone reports emergency state. Clear Emergency before takeoff.</div>',
+                unsafe_allow_html=True,
+            )
         if battery_percent is None:
-            st.caption("Takeoff requires live battery telemetry.")
+            guard_hints.append("Live battery telemetry required.")
         elif not battery_ok:
-            st.caption("Takeoff requires at least 20% battery.")
+            guard_hints.append("Battery must be at least 20%.")
+        if guard_hints:
+            st.markdown(
+                f'<div class="sax-compact-hint">{" ".join(guard_hints)}</div>',
+                unsafe_allow_html=True,
+            )
 
     def run_command(action: str) -> None:
         execute_drone_action(store, action, command_mode, drone_host)
@@ -644,8 +695,7 @@ def render_drone_controls(
 
     if real_mode:
         takeoff_disabled = (
-            not st.session_state.enable_real_takeoff_checkbox
-            or not control_ready
+            not control_ready
             or not battery_ok
             or emergency_active
         )
@@ -656,8 +706,12 @@ def render_drone_controls(
     land_disabled = real_mode and not control_ready
 
     cols = st.columns(2)
-    if cols[0].button("Arm", width="stretch", disabled=real_mode):
-        run_command("arm")
+    if cols[0].button(
+        "Arm / Flat Trim",
+        width="stretch",
+        disabled=trim_disabled,
+    ):
+        run_command("flat_trim" if real_mode else "arm")
     if cols[1].button("Takeoff", width="stretch", disabled=takeoff_disabled):
         run_command("takeoff")
 
@@ -667,9 +721,6 @@ def render_drone_controls(
     pause_label = "Hover" if real_mode else "Pause"
     if cols[1].button(pause_label, width="stretch", disabled=hover_disabled):
         run_command("pause")
-
-    if st.button("Flat Trim", width="stretch", disabled=trim_disabled):
-        run_command("flat_trim")
 
     if real_mode and st.button(
         "Clear Emergency",
@@ -861,11 +912,10 @@ def run_webcam_mode(
     frame_slot,
     detections_slot,
 ) -> None:
-    render_status_strip(status_slot, st.session_state.camera_source, model_name, [])
+    render_status_strip(status_slot, st.session_state.camera_source, [])
 
     if st.session_state.webcam_photo_bytes is None:
         with frame_slot.container():
-            st.info("macOS grants camera access to the browser for Webcam mode.")
             photo = st.camera_input(
                 "Capture sensor frame",
                 key=f"webcam_capture_{st.session_state.webcam_capture_key}",
@@ -897,7 +947,7 @@ def run_webcam_mode(
             st.session_state.webcam_capture_key += 1
             st.rerun()
 
-    render_status_strip(status_slot, st.session_state.camera_source, model_name, detections)
+    render_status_strip(status_slot, st.session_state.camera_source, detections)
     render_current_objects(detections_slot, detections, profile)
 
 
@@ -973,7 +1023,7 @@ def render_drone_video_fragment(
 ) -> None:
     if not st.session_state.running:
         release_drone_video_capture()
-        render_status_strip(status_slot, source, model_name, [])
+        render_status_strip(status_slot, source, [])
         frame_slot.info("Press Start to open the video source.")
         render_current_objects(detections_slot, [], profile)
         return
@@ -999,7 +1049,6 @@ def render_drone_video_fragment(
         render_status_strip(
             status_slot,
             source,
-            model_name,
             st.session_state.latest_detections,
         )
         return
@@ -1018,7 +1067,7 @@ def render_drone_video_fragment(
     now = time.monotonic()
     if now - st.session_state.last_drone_panel_refresh_at >= 0.35:
         st.session_state.last_drone_panel_refresh_at = now
-        render_status_strip(status_slot, source, model_name, latest_detections)
+        render_status_strip(status_slot, source, latest_detections)
         render_current_objects(detections_slot, latest_detections, profile)
 
 
@@ -1066,26 +1115,28 @@ def main() -> None:
         st.header("Input")
         input_mode = st.radio(
             "Mode",
-            ["Webcam", "Drone video"],
+            ["Webcam", "Drone Video"],
             help=(
-                "Webcam uses browser camera permission. Drone video "
+                "Webcam uses browser camera permission. Drone Video "
                 "uses OpenCV and is better for drone/video streams."
             ),
+            label_visibility="collapsed",
         )
-        source = st.text_input(
-            "Video source",
-            value=st.session_state.camera_source,
-            help="Use 0 for webcam, a video path, or tcp://192.168.1.1:5555 for AR.Drone experiments.",
-        )
-        st.session_state.camera_source = source
+        with st.expander("Details", expanded=False):
+            source = st.text_input(
+                "Video source",
+                value=st.session_state.camera_source,
+                help="Use 0 for webcam, a video path, or tcp://192.168.1.1:5555 for AR.Drone experiments.",
+            )
+            st.session_state.camera_source = source
 
-        model_name = st.selectbox(
-            "YOLO model",
-            ["yolo11n.pt", "yolo11s.pt", "yolov8n.pt"],
-            index=0,
-        )
-        confidence = st.slider("Confidence threshold", 0.1, 0.9, 0.35, 0.05)
-        frame_stride = st.slider("Detect every N frames", 1, 10, 3, 1)
+            model_name = st.selectbox(
+                "YOLO model",
+                ["yolo11n.pt", "yolo11s.pt", "yolov8n.pt"],
+                index=0,
+            )
+            confidence = st.slider("Confidence threshold", 0.1, 0.9, 0.35, 0.05)
+            frame_stride = st.slider("Detect every N frames", 1, 10, 3, 1)
 
     video_col, intel_col = st.columns([2, 1])
     with video_col:
