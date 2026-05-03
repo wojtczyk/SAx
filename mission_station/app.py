@@ -58,8 +58,16 @@ def apply_compact_layout() -> None:
             line-height: 1.1;
         }
 
+        h2 {
+            font-size: 1.25rem !important;
+        }
+
+        h3 {
+            font-size: 1.05rem !important;
+        }
+
         .sax-title {
-            font-size: 1.65rem;
+            font-size: 1.45rem;
             font-weight: 750;
             line-height: 1;
             margin: 0 0 0.3rem 0;
@@ -68,20 +76,21 @@ def apply_compact_layout() -> None:
         .sax-telemetry-grid {
             display: grid;
             grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 0.75rem 1rem;
-            margin: 0.75rem 0 0.75rem 0;
+            gap: 0.45rem 0.75rem;
+            margin: 0.55rem 0 0.55rem 0;
         }
 
         .sax-telemetry-label {
-            font-size: 0.82rem;
+            font-size: 0.72rem;
             font-weight: 700;
-            margin-bottom: 0.15rem;
+            margin-bottom: 0.08rem;
+            opacity: 0.78;
         }
 
         .sax-telemetry-value {
-            font-size: 1.65rem;
+            font-size: 1.02rem;
             font-weight: 650;
-            line-height: 1.05;
+            line-height: 1.15;
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
@@ -95,6 +104,61 @@ def apply_compact_layout() -> None:
             grid-column: 1 / -1;
             font-size: 0.8rem;
             opacity: 0.72;
+        }
+
+        .sax-status-strip {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.35rem;
+            margin: 0.05rem 0 0.55rem 0;
+        }
+
+        .sax-status-pill {
+            border: 1px solid rgba(128, 128, 128, 0.26);
+            border-radius: 6px;
+            background: rgba(128, 128, 128, 0.12);
+            padding: 0.22rem 0.45rem;
+            font-size: 0.78rem;
+            line-height: 1.1;
+        }
+
+        .sax-status-pill strong {
+            font-weight: 750;
+        }
+
+        .sax-detections {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.84rem;
+            margin-top: 0.15rem;
+        }
+
+        .sax-detections th,
+        .sax-detections td {
+            border-bottom: 1px solid rgba(128, 128, 128, 0.22);
+            padding: 0.25rem 0.35rem 0.25rem 0;
+            text-align: left;
+            vertical-align: middle;
+        }
+
+        .sax-detections th {
+            font-size: 0.72rem;
+            opacity: 0.72;
+            font-weight: 750;
+            text-transform: uppercase;
+        }
+
+        .sax-empty {
+            font-size: 0.84rem;
+            opacity: 0.72;
+            margin-top: 0.15rem;
+        }
+
+        .sax-control-state {
+            font-size: 1.05rem;
+            font-weight: 700;
+            line-height: 1.1;
+            margin: -0.25rem 0 0.4rem 0;
         }
         </style>
         """,
@@ -133,8 +197,9 @@ def should_log(
     return True
 
 
-def render_timeline(store: EventStore) -> None:
-    st.subheader("Mission Timeline")
+def render_timeline(store: EventStore, show_title: bool = True) -> None:
+    if show_title:
+        st.subheader("Mission Timeline")
     events = store.recent(limit=30)
     if not events:
         st.caption("No events yet.")
@@ -147,8 +212,13 @@ def render_timeline(store: EventStore) -> None:
         )
 
 
-def render_sitrep(store: EventStore, profile: MissionProfile) -> None:
-    st.subheader("SITREP")
+def render_sitrep(
+    store: EventStore,
+    profile: MissionProfile,
+    show_title: bool = True,
+) -> None:
+    if show_title:
+        st.subheader("SITREP")
     event_limit = st.slider("Events to summarize", 5, 100, 30, 5)
     if st.button("Generate SITREP", width="stretch"):
         st.session_state.latest_sitrep = generate_sitrep(
@@ -172,8 +242,10 @@ def render_mission_export(
     video_source: str,
     model_name: str,
     confidence: float,
+    show_title: bool = True,
 ) -> None:
-    st.subheader("Mission Export")
+    if show_title:
+        st.subheader("Mission Export")
     if st.button("Export Mission Report", width="stretch"):
         path = export_mission_report(
             EXPORT_DIR,
@@ -223,6 +295,49 @@ def is_drone_video_source(source: str, drone_host: str) -> bool:
     )
 
 
+def navdata_readings(snapshot: dict | None) -> dict[str, str]:
+    readings = {
+        "battery": "unknown",
+        "altitude": "unknown",
+        "state": "unknown",
+        "yaw": "unknown",
+        "velocity": "unknown",
+    }
+    if not snapshot or not snapshot.get("ok"):
+        return readings
+
+    battery = snapshot.get("battery_percent")
+    if battery is not None:
+        readings["battery"] = f"{battery}%"
+
+    altitude_cm = snapshot.get("altitude_cm")
+    if altitude_cm is not None:
+        readings["altitude"] = f"{altitude_cm / 100:.2f} m"
+
+    ctrl_state = snapshot.get("ctrl_state")
+    state_code = ctrl_state >> 16 if ctrl_state is not None else None
+    if state_code is not None:
+        readings["state"] = CTRL_STATE_NAMES.get(state_code, f"Unknown ({state_code})")
+
+    yaw = snapshot.get("psi_mdeg")
+    if yaw is not None:
+        readings["yaw"] = f"{yaw / 1000:.1f} deg"
+
+    velocity = (
+        snapshot.get("vx"),
+        snapshot.get("vy"),
+        snapshot.get("vz"),
+    )
+    if all(value is not None for value in velocity):
+        readings["velocity"] = (
+            f"{velocity[0] / 1000:.2f}, "
+            f"{velocity[1] / 1000:.2f}, "
+            f"{velocity[2] / 1000:.2f} m/s"
+        )
+
+    return readings
+
+
 def navdata_metric_html(label: str, value: str, wide: bool = False) -> str:
     class_name = "sax-telemetry-item sax-telemetry-wide" if wide else "sax-telemetry-item"
     return (
@@ -252,47 +367,53 @@ def render_navdata_snapshot(slot, snapshot: dict | None) -> None:
         )
         return
 
-    battery = snapshot.get("battery_percent")
-    battery_value = f"{battery}%" if battery is not None else "unknown"
-
-    altitude_cm = snapshot.get("altitude_cm")
-    altitude_value = f"{altitude_cm / 100:.2f} m" if altitude_cm is not None else "unknown"
-
-    ctrl_state = snapshot.get("ctrl_state")
-    state_code = ctrl_state >> 16 if ctrl_state is not None else None
-    flying_state = (
-        CTRL_STATE_NAMES.get(state_code, f"Unknown ({state_code})")
-        if state_code is not None
-        else "Unknown"
-    )
-
-    yaw = snapshot.get("psi_mdeg")
-    yaw_value = f"{yaw / 1000:.1f} deg" if yaw is not None else "unknown"
-
-    velocity = (
-        snapshot.get("vx"),
-        snapshot.get("vy"),
-        snapshot.get("vz"),
-    )
-    if all(value is not None for value in velocity):
-        velocity_value = (
-            f"{velocity[0] / 1000:.2f}, "
-            f"{velocity[1] / 1000:.2f}, "
-            f"{velocity[2] / 1000:.2f} m/s"
-        )
-    else:
-        velocity_value = "unknown"
+    readings = navdata_readings(snapshot)
 
     slot.markdown(
         (
             '<div class="sax-telemetry-grid">'
-            + navdata_metric_html("Battery", battery_value)
-            + navdata_metric_html("Altitude", altitude_value)
-            + navdata_metric_html("Flying State", flying_state)
-            + navdata_metric_html("Yaw", yaw_value)
-            + navdata_metric_html("Velocity", velocity_value, wide=True)
+            + navdata_metric_html("Battery", readings["battery"])
+            + navdata_metric_html("Altitude", readings["altitude"])
+            + navdata_metric_html("State", readings["state"])
+            + navdata_metric_html("Yaw", readings["yaw"])
+            + navdata_metric_html("Velocity", readings["velocity"], wide=True)
             + "</div>"
         ),
+        unsafe_allow_html=True,
+    )
+
+
+def render_status_strip(
+    slot,
+    source: str,
+    model_name: str,
+    detections: list[Detection],
+) -> None:
+    result = st.session_state.get("drone_probe")
+    drone_status = "connected" if result and result.get("ready_for_video") else "not linked"
+    video_status = "live" if st.session_state.running else "standby"
+    readings = navdata_readings(current_navdata_snapshot())
+    object_count = len(detections)
+    object_status = f"{object_count} object{'s' if object_count != 1 else ''}"
+
+    items = [
+        ("Drone", drone_status),
+        ("Battery", readings["battery"]),
+        ("Altitude", readings["altitude"]),
+        ("Video", video_status),
+        ("YOLO", model_name),
+        ("Objects", object_status),
+    ]
+    pill_html = "".join(
+        (
+            '<span class="sax-status-pill">'
+            f"<strong>{escape(label)}</strong> {escape(value)}"
+            "</span>"
+        )
+        for label, value in items
+    )
+    slot.markdown(
+        f'<div class="sax-status-strip">{pill_html}</div>',
         unsafe_allow_html=True,
     )
 
@@ -435,7 +556,11 @@ def render_drone_controls(
         horizontal=True,
     )
     real_mode = command_mode == "Drone"
-    st.metric("Simulation state", current_state.value)
+    st.caption("Simulation state")
+    st.markdown(
+        f'<div class="sax-control-state">{escape(current_state.value)}</div>',
+        unsafe_allow_html=True,
+    )
     if real_mode:
         st.warning("Real mode only enables Flat Trim, Land, and Emergency Stop.")
 
@@ -578,10 +703,14 @@ def render_current_objects(
     detections: list[Detection],
     profile: MissionProfile,
 ) -> None:
-    lines = ["### Current Objects"]
     if not detections:
-        lines.append("No objects above threshold.")
-        slot.markdown("\n\n".join(lines))
+        slot.markdown(
+            """
+            <h3>Current Objects</h3>
+            <div class="sax-empty">No objects above threshold.</div>
+            """,
+            unsafe_allow_html=True,
+        )
         return
 
     counts: Counter[str] = Counter()
@@ -596,24 +725,35 @@ def render_current_objects(
         )
         confidences[detection.label].append(detection.confidence)
 
+    rows = []
     for label, count in counts.most_common():
         priority_marker = "priority" if profile.is_priority(label) else "observed"
         confidence_list = ", ".join(
             f"{confidence:.0%}"
             for confidence in sorted(confidences[label], reverse=True)[:5]
         )
-        lines.extend(
-            [
-                f"**{label}**",
-                (
-                    f"{count} detection{'s' if count != 1 else ''} · "
-                    f"best {max_confidence[label]:.0%} · {priority_marker}"
-                ),
-                f"confidences: {confidence_list}",
-            ]
+        rows.append(
+            "<tr>"
+            f"<td><strong>{escape(label)}</strong></td>"
+            f"<td>{count}</td>"
+            f"<td>{max_confidence[label]:.0%}</td>"
+            f"<td>{escape(priority_marker)}</td>"
+            f"<td>{escape(confidence_list)}</td>"
+            "</tr>"
         )
 
-    slot.markdown("\n\n".join(lines))
+    slot.markdown(
+        (
+            "<h3>Current Objects</h3>"
+            '<table class="sax-detections">'
+            "<thead><tr>"
+            "<th>Object</th><th>Count</th><th>Best</th><th>Type</th><th>Confidences</th>"
+            "</tr></thead>"
+            f"<tbody>{''.join(rows)}</tbody>"
+            "</table>"
+        ),
+        unsafe_allow_html=True,
+    )
 
 
 def run_browser_snapshot_mode(
@@ -622,9 +762,11 @@ def run_browser_snapshot_mode(
     model_name: str,
     confidence: float,
     profile: MissionProfile,
+    status_slot,
     frame_slot,
     detections_slot,
 ) -> None:
+    render_status_strip(status_slot, st.session_state.camera_source, model_name, [])
     with frame_slot.container():
         st.info("macOS grants camera access to the browser for this mode.")
         result_slot = st.empty()
@@ -650,6 +792,7 @@ def run_browser_snapshot_mode(
             width="stretch",
         )
 
+    render_status_strip(status_slot, st.session_state.camera_source, model_name, detections)
     render_current_objects(detections_slot, detections, profile)
 
 
@@ -731,6 +874,7 @@ def main() -> None:
     video_col, intel_col = st.columns([2, 1])
     with video_col:
         st.subheader("Sensor Feed")
+        status_slot = st.empty()
         frame_slot = st.empty()
         detections_slot = st.empty()
 
@@ -738,35 +882,47 @@ def main() -> None:
         telemetry_slot = render_drone_diagnostics(store)
         render_drone_controls(store, profile, st.session_state.drone_host)
 
-        st.subheader("Operator Notes")
-        typed_note = st.text_area("Manual note", placeholder="Possible movement near the entrance...")
-        if st.button("Add note", width="stretch", disabled=not typed_note.strip()):
-            store.add("operator_note", typed_note.strip(), {})
-            st.rerun()
+        with st.expander("Operator Notes", expanded=False):
+            typed_note = st.text_area("Manual note", placeholder="Possible movement near the entrance...")
+            if st.button("Add note", width="stretch", disabled=not typed_note.strip()):
+                store.add("operator_note", typed_note.strip(), {})
+                st.rerun()
 
-        record_seconds = st.slider("Record seconds", 2, 15, 5, 1)
-        if st.button("Record voice note", width="stretch"):
-            try:
-                audio_path = recorder.record(record_seconds)
-                transcript = recorder.transcribe(audio_path)
-                store.add("voice_note", transcript, {"audio_path": str(audio_path)})
-                execute_operator_command(
-                    store,
-                    profile,
-                    parse_command(transcript),
-                    source="voice",
-                    command_mode=st.session_state.drone_command_mode,
-                    drone_host=st.session_state.drone_host,
-                )
-                st.success(transcript)
-            except TranscriptionUnavailable as exc:
-                st.warning(str(exc))
-            except Exception as exc:
-                st.error(f"Could not record/transcribe audio: {exc}")
+            record_seconds = st.slider("Record seconds", 2, 15, 5, 1)
+            if st.button("Record voice note", width="stretch"):
+                try:
+                    audio_path = recorder.record(record_seconds)
+                    transcript = recorder.transcribe(audio_path)
+                    store.add("voice_note", transcript, {"audio_path": str(audio_path)})
+                    execute_operator_command(
+                        store,
+                        profile,
+                        parse_command(transcript),
+                        source="voice",
+                        command_mode=st.session_state.drone_command_mode,
+                        drone_host=st.session_state.drone_host,
+                    )
+                    st.success(transcript)
+                except TranscriptionUnavailable as exc:
+                    st.warning(str(exc))
+                except Exception as exc:
+                    st.error(f"Could not record/transcribe audio: {exc}")
 
-        render_sitrep(store, profile)
-        render_mission_export(store, profile, source, model_name, confidence)
-        render_timeline(store)
+        with st.expander("SITREP", expanded=False):
+            render_sitrep(store, profile, show_title=False)
+
+        with st.expander("Mission Export", expanded=False):
+            render_mission_export(
+                store,
+                profile,
+                source,
+                model_name,
+                confidence,
+                show_title=False,
+            )
+
+        with st.expander("Mission Timeline", expanded=False):
+            render_timeline(store, show_title=False)
 
     if input_mode == "Browser snapshot":
         run_browser_snapshot_mode(
@@ -775,12 +931,14 @@ def main() -> None:
             model_name,
             confidence,
             profile,
+            status_slot,
             frame_slot,
             detections_slot,
         )
         return
 
     if not st.session_state.running:
+        render_status_strip(status_slot, source, model_name, [])
         frame_slot.info("Press Start to open the video source.")
         render_current_objects(detections_slot, [], profile)
         return
@@ -813,8 +971,9 @@ def main() -> None:
 
         annotated = detector.draw(frame, latest_detections)
         frame_slot.image(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB), channels="RGB")
-        render_current_objects(detections_slot, latest_detections, profile)
         maybe_auto_refresh_navdata(telemetry_slot, source, st.session_state.drone_host)
+        render_status_strip(status_slot, source, model_name, latest_detections)
+        render_current_objects(detections_slot, latest_detections, profile)
 
         time.sleep(0.03)
 
