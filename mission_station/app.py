@@ -10,6 +10,7 @@ import numpy as np
 import streamlit as st
 
 from sax_station.ardrone import (
+    ARDroneATClient,
     CTRL_STATE_NAMES,
     DEFAULT_DRONE_HOST,
     DRONE_STATE_EMERGENCY_MASK,
@@ -225,6 +226,8 @@ def init_state() -> None:
     st.session_state.setdefault("drone_video_frame_index", 0)
     st.session_state.setdefault("drone_video_missed_frames", 0)
     st.session_state.setdefault("last_drone_panel_refresh_at", 0.0)
+    st.session_state.setdefault("last_hover_keepalive_at", 0.0)
+    st.session_state.setdefault("last_hover_keepalive_error", "")
     st.session_state.setdefault("latest_detections", [])
     st.session_state.setdefault("webcam_photo_bytes", None)
     st.session_state.setdefault("webcam_capture_key", 0)
@@ -504,6 +507,30 @@ def maybe_auto_refresh_navdata(slot, source: str, drone_host: str) -> None:
     render_navdata_snapshot(slot, current_navdata_snapshot())
 
 
+@st.fragment(run_every=0.25)
+def flight_keepalive_fragment(drone_host: str) -> None:
+    if st.session_state.drone_command_mode != "Drone":
+        return
+    if st.session_state.drone_state not in {
+        DroneState.AIRBORNE.value,
+        DroneState.PAUSED.value,
+    }:
+        return
+    if drone_reports_emergency(current_navdata_snapshot()):
+        return
+
+    now = time.monotonic()
+    if now - st.session_state.last_hover_keepalive_at < 0.2:
+        return
+
+    st.session_state.last_hover_keepalive_at = now
+    try:
+        ARDroneATClient(drone_host).hover(repeat=1, interval_seconds=0.0)
+        st.session_state.last_hover_keepalive_error = ""
+    except OSError as exc:
+        st.session_state.last_hover_keepalive_error = str(exc)
+
+
 def execute_drone_action(
     store: EventStore,
     action: str,
@@ -686,6 +713,12 @@ def render_drone_controls(
         if guard_hints:
             st.markdown(
                 f'<div class="sax-compact-hint">{" ".join(guard_hints)}</div>',
+                unsafe_allow_html=True,
+            )
+        keepalive_error = st.session_state.get("last_hover_keepalive_error")
+        if keepalive_error:
+            st.markdown(
+                f'<div class="sax-compact-error">Hover keepalive failed: {escape(keepalive_error)}</div>',
                 unsafe_allow_html=True,
             )
 
@@ -1148,6 +1181,7 @@ def main() -> None:
     with intel_col:
         telemetry_slot = render_drone_diagnostics(store)
         render_drone_controls(store, profile, st.session_state.drone_host)
+        flight_keepalive_fragment(st.session_state.drone_host)
 
         with st.expander("Operator Notes", expanded=False):
             typed_note = st.text_area("Manual note", placeholder="Possible movement near the entrance...")

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import socket
 import struct
+import threading
 import time
 from typing import Any
 
@@ -30,6 +31,16 @@ CTRL_STATE_NAMES = {
     8: "Landing",
     9: "Looping",
 }
+_SEQUENCE_LOCK = threading.Lock()
+_NEXT_SEQUENCE = max(1, int(time.monotonic() * 1000))
+
+
+def next_at_sequence() -> int:
+    global _NEXT_SEQUENCE
+    with _SEQUENCE_LOCK:
+        sequence = _NEXT_SEQUENCE
+        _NEXT_SEQUENCE += 1
+        return sequence
 
 
 @dataclass(frozen=True)
@@ -91,12 +102,20 @@ class NavdataSnapshot:
 
 
 class ARDroneATClient:
-    def __init__(self, host: str = DEFAULT_DRONE_HOST, local_port: int = CONTROL_PORT) -> None:
+    def __init__(
+        self,
+        host: str = DEFAULT_DRONE_HOST,
+        local_port: int = CONTROL_PORT,
+        sequence_start: int | None = None,
+    ) -> None:
         self.host = host
         self.local_port = local_port
-        self.sequence = 1
+        self.sequence = sequence_start
 
     def _next_sequence(self) -> int:
+        if self.sequence is None:
+            return next_at_sequence()
+
         sequence = self.sequence
         self.sequence += 1
         return sequence
@@ -391,7 +410,7 @@ def send_real_drone_command(
             False,
             f"Drone command blocked: {action.replace('_', ' ')} is not enabled yet.",
             action,
-            "Only flat trim, clear emergency, guarded takeoff, hover, land, and emergency stop are enabled in real mode.",
+            "Only flat trim, clear emergency, takeoff, hover, land, and emergency stop are enabled in real mode.",
             event_kind="drone_real_command_blocked",
         )
 
