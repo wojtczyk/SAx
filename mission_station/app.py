@@ -186,6 +186,8 @@ def init_state() -> None:
     st.session_state.setdefault("latest_detections", [])
     st.session_state.setdefault("enable_real_takeoff_checkbox", False)
     st.session_state.setdefault("reset_real_takeoff_checkbox", False)
+    st.session_state.setdefault("webcam_photo_bytes", None)
+    st.session_state.setdefault("webcam_capture_key", 0)
     if st.session_state.drone_command_mode not in {"Simulation", "Drone"}:
         st.session_state.drone_command_mode = "Drone"
     if st.session_state.reset_real_takeoff_checkbox:
@@ -860,30 +862,40 @@ def run_webcam_mode(
     detections_slot,
 ) -> None:
     render_status_strip(status_slot, st.session_state.camera_source, model_name, [])
-    with frame_slot.container():
-        st.info("macOS grants camera access to the browser for Webcam mode.")
-        result_slot = st.empty()
-        photo = st.camera_input("Capture sensor frame")
 
-    if photo is None:
+    if st.session_state.webcam_photo_bytes is None:
+        with frame_slot.container():
+            st.info("macOS grants camera access to the browser for Webcam mode.")
+            photo = st.camera_input(
+                "Capture sensor frame",
+                key=f"webcam_capture_{st.session_state.webcam_capture_key}",
+            )
+
+        if photo is not None:
+            st.session_state.webcam_photo_bytes = photo.getvalue()
+            st.rerun()
+
         render_current_objects(detections_slot, [], profile)
         return
 
     detector.load(model_name)
-    bytes_data = photo.getvalue()
-    image_array = np.frombuffer(bytes_data, np.uint8)
+    image_array = np.frombuffer(st.session_state.webcam_photo_bytes, np.uint8)
     frame = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
     detections = detector.detect(frame, confidence)
     log_detections(store, detections, profile)
     annotated = detector.draw(frame, detections)
 
-    with result_slot.container():
+    with frame_slot.container():
         st.image(
             cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB),
             caption="Annotated detections",
             channels="RGB",
             width="stretch",
         )
+        if st.button("Clear image", width="stretch"):
+            st.session_state.webcam_photo_bytes = None
+            st.session_state.webcam_capture_key += 1
+            st.rerun()
 
     render_status_strip(status_slot, st.session_state.camera_source, model_name, detections)
     render_current_objects(detections_slot, detections, profile)
