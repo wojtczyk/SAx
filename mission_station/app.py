@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from collections import Counter, defaultdict
 from html import escape
 import time
@@ -127,6 +128,19 @@ def apply_compact_layout() -> None:
 
         .sax-status-pill strong {
             font-weight: 750;
+        }
+
+        .sax-video-frame {
+            width: 100%;
+            line-height: 0;
+            min-height: 260px;
+        }
+
+        .sax-video-frame img {
+            display: block;
+            width: 100%;
+            height: auto;
+            border-radius: 6px;
         }
 
         .sax-detections {
@@ -1002,16 +1016,18 @@ def render_video_frame(slot, frame) -> None:
     ok, encoded = cv2.imencode(
         ".jpg",
         frame,
-        [int(cv2.IMWRITE_JPEG_QUALITY), 82],
+        [int(cv2.IMWRITE_JPEG_QUALITY), 76],
     )
     if ok:
-        slot.image(encoded.tobytes(), width="stretch")
-    else:
-        slot.image(
-            cv2.cvtColor(frame, cv2.COLOR_BGR2RGB),
-            channels="RGB",
-            output_format="JPEG",
-            width="stretch",
+        image_data = base64.b64encode(encoded.tobytes()).decode("ascii")
+        slot.markdown(
+            (
+                '<div class="sax-video-frame">'
+                f'<img src="data:image/jpeg;base64,{image_data}" '
+                'alt="Live drone video frame" />'
+                "</div>"
+            ),
+            unsafe_allow_html=True,
         )
 
 
