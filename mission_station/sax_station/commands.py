@@ -74,7 +74,14 @@ def parse_command(raw: str) -> ParsedCommand:
         return ParsedCommand("land")
     if text in {"emergency land", "emergency landing", "emergency stop", "abort"}:
         return ParsedCommand("emergency_land")
-    if text in {"assisted search", "run assisted search", "start assisted search"}:
+    if text in {
+        "assisted search",
+        "run assisted search",
+        "start assisted search",
+        "autonomous search",
+        "run autonomous search",
+        "start autonomous search",
+    }:
         return ParsedCommand("assisted_search")
     if text in {"sitrep", "generate sitrep", "create sitrep"}:
         return ParsedCommand("sitrep")

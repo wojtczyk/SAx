@@ -8,7 +8,7 @@ Phase 1 Python prototype for a Mac-based edge mission station:
 - Speech-to-text operator notes
 - Offline SITREP generation from recent detections and notes
 - Mission profiles for Search And Rescue, Detect, Track, Map, and Protect workflows
-- Simulated drone control and Assisted Search mission logging
+- Simulated drone control and Autonomous Search mission logging
 - Typed and voice command parsing for drone simulation, notes, and SITREP generation
 - Markdown mission report export at `mission_station/exports/YYYY-MM-DD_HHMM_sax_report.md`
 - A path to swap webcam input for Parrot AR.Drone video
@@ -61,7 +61,7 @@ The app includes a **Command mode** selector in the Drone Control panel:
 - **Simulation**: all drone actions are logged only as simulated events.
 - **Drone**: enables `Flat Trim`, guarded `Takeoff`, `Hover`, `Land`, and `Emergency Stop`.
 
-Movement and assisted search remain disabled in Drone mode until hover and landing are proven safe. `Emergency Stop` sends the AR.Drone emergency motor-cut sequence and can cause a crash if the drone is airborne.
+Nudge movement, scan, and autonomous search are enabled in Drone mode after takeoff. `Emergency Stop` sends the AR.Drone emergency motor-cut sequence and can cause a crash if the drone is airborne.
 
 ## macOS Camera Notes
 

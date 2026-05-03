@@ -14,11 +14,22 @@ NAVDATA_PORT = 5554
 CONTROL_PORT = 5556
 NAVDATA_HEADER = 0x55667788
 NAVDATA_DEMO_TAG = 0
-NUDGE_SPEED = 0.08
+NUDGE_FORWARD_SPEED = 0.08
+NUDGE_BACK_SPEED = 0.12
+NUDGE_ROLL_SPEED = 0.14
 NUDGE_VERTICAL_SPEED = 0.18
-NUDGE_YAW_SPEED = 0.22
-NUDGE_REPEAT = 7
+NUDGE_YAW_SPEED = 0.28
+NUDGE_REPEAT = 9
 NUDGE_INTERVAL_SECONDS = 0.03
+SCAN_STEPS = ("yaw_left", "yaw_right", "yaw_right", "yaw_left")
+ASSISTED_SEARCH_STEPS = (
+    "yaw_left",
+    "yaw_right",
+    "move_forward",
+    "yaw_left",
+    "yaw_right",
+    "move_back",
+)
 REF_LAND = 290717696
 REF_TAKEOFF = 290718208
 REF_EMERGENCY = 290717952
@@ -221,16 +232,16 @@ class ARDroneATClient:
 
     def nudge(self, action: str) -> None:
         if action == "move_forward":
-            self.move(pitch=-NUDGE_SPEED)
+            self.move(pitch=-NUDGE_FORWARD_SPEED)
             return
         if action == "move_back":
-            self.move(pitch=NUDGE_SPEED)
+            self.move(pitch=NUDGE_BACK_SPEED)
             return
         if action == "move_left":
-            self.move(roll=-NUDGE_SPEED)
+            self.move(roll=-NUDGE_ROLL_SPEED)
             return
         if action == "move_right":
-            self.move(roll=NUDGE_SPEED)
+            self.move(roll=NUDGE_ROLL_SPEED)
             return
         if action == "move_up":
             self.move(gaz=NUDGE_VERTICAL_SPEED)
@@ -246,6 +257,22 @@ class ARDroneATClient:
             return
 
         raise ValueError(f"unknown nudge action: {action}")
+
+    def run_nudge_sequence(
+        self,
+        steps: tuple[str, ...],
+        pause_seconds: float = 0.12,
+    ) -> None:
+        for step in steps:
+            self.nudge(step)
+            time.sleep(pause_seconds)
+        self.hover(repeat=6)
+
+    def scan(self) -> None:
+        self.run_nudge_sequence(SCAN_STEPS)
+
+    def assisted_search(self) -> None:
+        self.run_nudge_sequence(ASSISTED_SEARCH_STEPS)
 
     def land(self, repeat: int = 30, interval_seconds: float = 0.03) -> None:
         for _ in range(repeat):
@@ -479,6 +506,8 @@ def send_real_drone_command(
         "flat_trim",
         "takeoff",
         "pause",
+        "scan",
+        "assisted_search",
         "land",
         "emergency_land",
         "reset_emergency",
@@ -488,7 +517,7 @@ def send_real_drone_command(
             False,
             f"Drone command blocked: {action.replace('_', ' ')} is not enabled yet.",
             action,
-            "Only flat trim, clear emergency, takeoff, hover, nudge movement, land, and emergency stop are enabled in real mode.",
+            "Only flat trim, clear emergency, takeoff, hover, scan, autonomous search, nudge movement, land, and emergency stop are enabled in real mode.",
             event_kind="drone_real_command_blocked",
         )
 
@@ -525,6 +554,22 @@ def send_real_drone_command(
                 f"Drone {action.replace('_', ' ')} nudge sent.",
                 action,
                 "Short AT*PCMD movement pulse sent on UDP 5556, followed by zero-motion hover.",
+            )
+        if action == "scan":
+            client.scan()
+            return RealDroneCommandResult(
+                True,
+                "Drone scan pattern sent.",
+                action,
+                "Stationary yaw sweep sent as short AT*PCMD pulses, followed by zero-motion hover.",
+            )
+        if action == "assisted_search":
+            client.assisted_search()
+            return RealDroneCommandResult(
+                True,
+                "Drone autonomous search pattern sent.",
+                action,
+                "Conservative scan-forward-scan-back pattern sent as short AT*PCMD pulses, followed by zero-motion hover.",
             )
         if action == "land":
             client.land()

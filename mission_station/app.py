@@ -35,6 +35,19 @@ APP_ROOT = Path(__file__).resolve().parent
 DATA_DIR = APP_ROOT / "data"
 EXPORT_DIR = APP_ROOT / "exports"
 DATA_DIR.mkdir(exist_ok=True)
+REAL_NUDGE_ACTIONS = {
+    "move_forward",
+    "move_back",
+    "move_left",
+    "move_right",
+    "move_up",
+    "move_down",
+    "yaw_left",
+    "yaw_right",
+}
+REAL_PATTERN_ACTIONS = {"scan", "assisted_search"}
+REAL_MOTION_ACTIONS = REAL_NUDGE_ACTIONS | REAL_PATTERN_ACTIONS
+KEEPALIVE_QUIET_AFTER_NUDGE_SECONDS = 0.9
 
 
 def apply_compact_layout() -> None:
@@ -242,6 +255,7 @@ def init_state() -> None:
     st.session_state.setdefault("last_drone_panel_refresh_at", 0.0)
     st.session_state.setdefault("last_hover_keepalive_at", 0.0)
     st.session_state.setdefault("last_hover_keepalive_error", "")
+    st.session_state.setdefault("last_motion_command_at", 0.0)
     st.session_state.setdefault("latest_detections", [])
     st.session_state.setdefault("webcam_photo_bytes", None)
     st.session_state.setdefault("webcam_capture_key", 0)
@@ -528,12 +542,15 @@ def flight_keepalive_fragment(drone_host: str) -> None:
     if st.session_state.drone_state not in {
         DroneState.AIRBORNE.value,
         DroneState.PAUSED.value,
+        DroneState.SCANNING.value,
     }:
         return
     if drone_reports_emergency(current_navdata_snapshot()):
         return
 
     now = time.monotonic()
+    if now - st.session_state.last_motion_command_at < KEEPALIVE_QUIET_AFTER_NUDGE_SECONDS:
+        return
     if now - st.session_state.last_hover_keepalive_at < 0.2:
         return
 
@@ -552,7 +569,12 @@ def execute_drone_action(
     drone_host: str,
 ) -> None:
     if command_mode == "Drone":
+        is_motion = action in REAL_MOTION_ACTIONS
+        if is_motion:
+            st.session_state.last_motion_command_at = time.monotonic()
         result = send_real_drone_command(drone_host, action)
+        if is_motion:
+            st.session_state.last_motion_command_at = time.monotonic()
         snapshot_after = read_navdata_snapshot(
             drone_host,
             timeout_seconds=0.5,
@@ -562,6 +584,8 @@ def execute_drone_action(
         if action == "takeoff" and result.ok:
             st.session_state.drone_state = DroneState.AIRBORNE.value
         if action == "pause" and result.ok:
+            st.session_state.drone_state = DroneState.PAUSED.value
+        if action in REAL_MOTION_ACTIONS and result.ok:
             st.session_state.drone_state = DroneState.PAUSED.value
         if action == "land" and result.ok:
             st.session_state.drone_state = DroneState.DISARMED.value
@@ -631,14 +655,7 @@ def execute_operator_command(
         "reset_emergency",
         "emergency_land",
         "assisted_search",
-        "move_forward",
-        "move_back",
-        "move_left",
-        "move_right",
-        "move_up",
-        "move_down",
-        "yaw_left",
-        "yaw_right",
+        *REAL_NUDGE_ACTIONS,
     }:
         execute_drone_action(store, parsed.intent, command_mode, drone_host)
         store.add(
@@ -775,6 +792,7 @@ def render_drone_controls(
         not airborne_state
         or (real_mode and (not control_ready or emergency_active))
     )
+    pattern_disabled = movement_disabled
     trim_disabled = real_mode and not control_ready
     land_disabled = real_mode and not control_ready
 
@@ -798,28 +816,29 @@ def render_drone_controls(
         run_command("takeoff")
 
     cols = st.columns(2)
-    if cols[0].button("Scan", width="stretch", disabled=real_mode):
+    if cols[0].button("Scan", width="stretch", disabled=pattern_disabled):
         run_command("scan")
     pause_label = "Hover" if real_mode else "Pause"
     if cols[1].button(pause_label, width="stretch", disabled=hover_disabled):
         run_command("pause")
 
-    st.caption("Nudge controls send short pulses, then hover.")
-    cols = st.columns(2)
-    nudge_button("Forward", "move_forward", cols[0])
-    nudge_button("Up", "move_up", cols[1])
+    with st.expander("Nudge Controls", expanded=False):
+        st.caption("Short manual pulses, then hover.")
+        cols = st.columns(2)
+        nudge_button("Forward", "move_forward", cols[0])
+        nudge_button("Up", "move_up", cols[1])
 
-    cols = st.columns(2)
-    nudge_button("Left", "move_left", cols[0])
-    nudge_button("Right", "move_right", cols[1])
+        cols = st.columns(2)
+        nudge_button("Left", "move_left", cols[0])
+        nudge_button("Right", "move_right", cols[1])
 
-    cols = st.columns(2)
-    nudge_button("Back", "move_back", cols[0])
-    nudge_button("Down", "move_down", cols[1])
+        cols = st.columns(2)
+        nudge_button("Back", "move_back", cols[0])
+        nudge_button("Down", "move_down", cols[1])
 
-    cols = st.columns(2)
-    nudge_button("Yaw Left", "yaw_left", cols[0])
-    nudge_button("Yaw Right", "yaw_right", cols[1])
+        cols = st.columns(2)
+        nudge_button("Yaw Left", "yaw_left", cols[0])
+        nudge_button("Yaw Right", "yaw_right", cols[1])
 
     if real_mode and st.button(
         "Clear Emergency",
@@ -834,7 +853,8 @@ def render_drone_controls(
     if cols[1].button("Emergency Stop", width="stretch"):
         run_command("emergency_land")
 
-    if st.button("Run Assisted Search", width="stretch", disabled=real_mode):
+    assisted_search_disabled = pattern_disabled if real_mode else False
+    if st.button("Run Autonomous Search", width="stretch", disabled=assisted_search_disabled):
         execute_drone_action(store, "assisted_search", command_mode, drone_host)
         st.rerun()
 
@@ -856,7 +876,7 @@ def render_drone_controls(
         )
         st.rerun()
 
-    st.caption("Scan and assisted search remain disabled for real drone mode.")
+    st.caption("Scan and autonomous search use short autonomous pulse sequences in drone mode.")
 
 
 def render_drone_diagnostics(store: EventStore):

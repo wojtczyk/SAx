@@ -35,7 +35,7 @@ def command(current_state: DroneState, action: str) -> DroneCommandResult:
     if action == "scan":
         if current_state not in {DroneState.AIRBORNE, DroneState.PAUSED}:
             return DroneCommandResult(current_state, "Scan blocked: drone simulation must be airborne.")
-        return DroneCommandResult(DroneState.SCANNING, "Simulated assisted search scan started.")
+        return DroneCommandResult(DroneState.SCANNING, "Simulated autonomous scan started.")
 
     if action == "pause":
         if current_state not in {DroneState.AIRBORNE, DroneState.SCANNING}:
@@ -76,10 +76,10 @@ def command(current_state: DroneState, action: str) -> DroneCommandResult:
 
 def assisted_search_sequence() -> list[DroneCommandResult]:
     return [
-        DroneCommandResult(DroneState.ARMED, "Assisted Search: arm simulation."),
-        DroneCommandResult(DroneState.AIRBORNE, "Assisted Search: takeoff and hover."),
-        DroneCommandResult(DroneState.SCANNING, "Assisted Search: rotate scan left."),
-        DroneCommandResult(DroneState.SCANNING, "Assisted Search: rotate scan right."),
-        DroneCommandResult(DroneState.SCANNING, "Assisted Search: capture and analyze sensor frame."),
-        DroneCommandResult(DroneState.DISARMED, "Assisted Search: land and disarm simulation."),
+        DroneCommandResult(DroneState.ARMED, "Autonomous Search: arm simulation."),
+        DroneCommandResult(DroneState.AIRBORNE, "Autonomous Search: takeoff and hover."),
+        DroneCommandResult(DroneState.SCANNING, "Autonomous Search: rotate scan left."),
+        DroneCommandResult(DroneState.SCANNING, "Autonomous Search: rotate scan right."),
+        DroneCommandResult(DroneState.SCANNING, "Autonomous Search: capture and analyze sensor frame."),
+        DroneCommandResult(DroneState.DISARMED, "Autonomous Search: land and disarm simulation."),
     ]
