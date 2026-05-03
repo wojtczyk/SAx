@@ -12,6 +12,8 @@ import streamlit as st
 from sax_station.ardrone import (
     CTRL_STATE_NAMES,
     DEFAULT_DRONE_HOST,
+    DRONE_STATE_EMERGENCY_MASK,
+    DRONE_STATE_FLYING_MASK,
     probe_drone,
     read_navdata_snapshot,
     send_real_drone_command,
@@ -179,10 +181,16 @@ def init_state() -> None:
     st.session_state.setdefault("drone_video_capture", None)
     st.session_state.setdefault("drone_video_source", "")
     st.session_state.setdefault("drone_video_frame_index", 0)
+    st.session_state.setdefault("drone_video_missed_frames", 0)
+    st.session_state.setdefault("last_drone_panel_refresh_at", 0.0)
     st.session_state.setdefault("latest_detections", [])
-    st.session_state.setdefault("enable_real_takeoff", False)
+    st.session_state.setdefault("enable_real_takeoff_checkbox", False)
+    st.session_state.setdefault("reset_real_takeoff_checkbox", False)
     if st.session_state.drone_command_mode not in {"Simulation", "Drone"}:
         st.session_state.drone_command_mode = "Drone"
+    if st.session_state.reset_real_takeoff_checkbox:
+        st.session_state.enable_real_takeoff_checkbox = False
+        st.session_state.reset_real_takeoff_checkbox = False
 
 
 def parse_source(raw: str) -> int | str:
@@ -321,9 +329,18 @@ def navdata_readings(snapshot: dict | None) -> dict[str, str]:
     if altitude_cm is not None:
         readings["altitude"] = f"{altitude_cm / 100:.2f} m"
 
+    drone_state = snapshot.get("drone_state")
+    if drone_state is not None:
+        if drone_state & DRONE_STATE_EMERGENCY_MASK:
+            readings["state"] = "Emergency"
+        elif drone_state & DRONE_STATE_FLYING_MASK:
+            readings["state"] = "Flying"
+        else:
+            readings["state"] = "Landed"
+
     ctrl_state = snapshot.get("ctrl_state")
     state_code = ctrl_state >> 16 if ctrl_state is not None else None
-    if state_code is not None:
+    if state_code is not None and readings["state"] == "unknown":
         readings["state"] = CTRL_STATE_NAMES.get(state_code, f"Unknown ({state_code})")
 
     yaw = snapshot.get("psi_mdeg")
@@ -343,6 +360,13 @@ def navdata_readings(snapshot: dict | None) -> dict[str, str]:
         )
 
     return readings
+
+
+def drone_reports_emergency(snapshot: dict | None) -> bool:
+    if not snapshot or not snapshot.get("ok"):
+        return False
+    drone_state = snapshot.get("drone_state")
+    return bool(drone_state is not None and drone_state & DRONE_STATE_EMERGENCY_MASK)
 
 
 def navdata_metric_html(label: str, value: str, wide: bool = False) -> str:
@@ -451,17 +475,25 @@ def execute_drone_action(
 ) -> None:
     if command_mode == "Drone":
         result = send_real_drone_command(drone_host, action)
+        snapshot_after = read_navdata_snapshot(
+            drone_host,
+            timeout_seconds=0.5,
+            initialize=False,
+        )
+        store_navdata_snapshot(snapshot_after)
         if action == "takeoff" and result.ok:
             st.session_state.drone_state = DroneState.AIRBORNE.value
-            st.session_state.enable_real_takeoff = False
+            st.session_state.reset_real_takeoff_checkbox = True
         if action == "pause" and result.ok:
             st.session_state.drone_state = DroneState.PAUSED.value
         if action == "land" and result.ok:
             st.session_state.drone_state = DroneState.DISARMED.value
-            st.session_state.enable_real_takeoff = False
+            st.session_state.reset_real_takeoff_checkbox = True
         if action == "emergency_land" and result.ok:
             st.session_state.drone_state = DroneState.EMERGENCY.value
-            st.session_state.enable_real_takeoff = False
+            st.session_state.reset_real_takeoff_checkbox = True
+        if action == "reset_emergency" and result.ok:
+            st.session_state.drone_state = DroneState.DISARMED.value
         store.add(
             result.event_kind,
             result.summary,
@@ -471,6 +503,7 @@ def execute_drone_action(
                 "action": result.action,
                 "host": drone_host,
                 "detail": result.detail,
+                "navdata_after": snapshot_after.__dict__,
             },
         )
         return
@@ -520,6 +553,7 @@ def execute_operator_command(
         "pause",
         "land",
         "flat_trim",
+        "reset_emergency",
         "emergency_land",
         "assisted_search",
     }:
@@ -579,6 +613,7 @@ def render_drone_controls(
         else None
     )
     battery_ok = battery_percent is not None and battery_percent >= 20
+    emergency_active = drone_reports_emergency(snapshot)
 
     st.caption("Simulation state")
     st.markdown(
@@ -589,11 +624,13 @@ def render_drone_controls(
         st.warning("Drone mode can spin motors. Keep clear and keep Emergency Stop visible.")
         st.checkbox(
             "Enable guarded takeoff",
-            key="enable_real_takeoff",
+            key="enable_real_takeoff_checkbox",
             disabled=not control_ready or not battery_ok,
         )
         if not control_ready:
             st.caption("Probe Drone before enabling takeoff or hover.")
+        if emergency_active:
+            st.error("Drone reports emergency state. Clear Emergency before takeoff.")
         if battery_percent is None:
             st.caption("Takeoff requires live battery telemetry.")
         elif not battery_ok:
@@ -605,9 +642,10 @@ def render_drone_controls(
 
     if real_mode:
         takeoff_disabled = (
-            not st.session_state.enable_real_takeoff
+            not st.session_state.enable_real_takeoff_checkbox
             or not control_ready
             or not battery_ok
+            or emergency_active
         )
     else:
         takeoff_disabled = False
@@ -630,6 +668,13 @@ def render_drone_controls(
 
     if st.button("Flat Trim", width="stretch", disabled=trim_disabled):
         run_command("flat_trim")
+
+    if real_mode and st.button(
+        "Clear Emergency",
+        width="stretch",
+        disabled=not control_ready or not emergency_active,
+    ):
+        run_command("reset_emergency")
 
     cols = st.columns(2)
     if cols[0].button("Land", width="stretch", disabled=land_disabled):
@@ -849,10 +894,30 @@ def open_capture(source: str) -> cv2.VideoCapture:
     if isinstance(parsed_source, int):
         capture = cv2.VideoCapture(parsed_source, cv2.CAP_AVFOUNDATION)
         if capture.isOpened():
+            capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             return capture
         capture.release()
 
-    return cv2.VideoCapture(parsed_source)
+    capture = cv2.VideoCapture(parsed_source)
+    capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    return capture
+
+
+def render_video_frame(slot, frame) -> None:
+    ok, encoded = cv2.imencode(
+        ".jpg",
+        frame,
+        [int(cv2.IMWRITE_JPEG_QUALITY), 82],
+    )
+    if ok:
+        slot.image(encoded.tobytes(), width="stretch")
+    else:
+        slot.image(
+            cv2.cvtColor(frame, cv2.COLOR_BGR2RGB),
+            channels="RGB",
+            output_format="JPEG",
+            width="stretch",
+        )
 
 
 def release_drone_video_capture() -> None:
@@ -862,6 +927,7 @@ def release_drone_video_capture() -> None:
     st.session_state.drone_video_capture = None
     st.session_state.drone_video_source = ""
     st.session_state.drone_video_frame_index = 0
+    st.session_state.drone_video_missed_frames = 0
 
 
 def drone_video_capture_for(source: str) -> cv2.VideoCapture:
@@ -874,11 +940,12 @@ def drone_video_capture_for(source: str) -> cv2.VideoCapture:
     st.session_state.drone_video_capture = capture
     st.session_state.drone_video_source = source
     st.session_state.drone_video_frame_index = 0
+    st.session_state.drone_video_missed_frames = 0
     st.session_state.latest_detections = []
     return capture
 
 
-@st.fragment(run_every=0.05)
+@st.fragment(run_every=0.12)
 def render_drone_video_fragment(
     store: EventStore,
     detector: YoloDetector,
@@ -914,7 +981,9 @@ def render_drone_video_fragment(
 
     ok, frame = capture.read()
     if not ok:
-        frame_slot.warning("No frame received from video source.")
+        st.session_state.drone_video_missed_frames += 1
+        if st.session_state.drone_video_missed_frames >= 12:
+            frame_slot.warning("No frame received from video source.")
         render_status_strip(
             status_slot,
             source,
@@ -923,6 +992,7 @@ def render_drone_video_fragment(
         )
         return
 
+    st.session_state.drone_video_missed_frames = 0
     st.session_state.drone_video_frame_index += 1
     if st.session_state.drone_video_frame_index % frame_stride == 0:
         st.session_state.latest_detections = detector.detect(frame, confidence)
@@ -930,10 +1000,14 @@ def render_drone_video_fragment(
 
     latest_detections = st.session_state.latest_detections
     annotated = detector.draw(frame, latest_detections)
-    frame_slot.image(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB), channels="RGB")
+    render_video_frame(frame_slot, annotated)
     maybe_auto_refresh_navdata(telemetry_slot, source, st.session_state.drone_host)
-    render_status_strip(status_slot, source, model_name, latest_detections)
-    render_current_objects(detections_slot, latest_detections, profile)
+
+    now = time.monotonic()
+    if now - st.session_state.last_drone_panel_refresh_at >= 0.35:
+        st.session_state.last_drone_panel_refresh_at = now
+        render_status_strip(status_slot, source, model_name, latest_detections)
+        render_current_objects(detections_slot, latest_detections, profile)
 
 
 def main() -> None:

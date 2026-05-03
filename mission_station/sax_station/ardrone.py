@@ -16,6 +16,8 @@ NAVDATA_DEMO_TAG = 0
 REF_LAND = 290717696
 REF_TAKEOFF = 290718208
 REF_EMERGENCY = 290717952
+DRONE_STATE_FLYING_MASK = 1 << 0
+DRONE_STATE_EMERGENCY_MASK = 1 << 31
 CTRL_STATE_NAMES = {
     0: "Unknown",
     1: "Inited",
@@ -136,7 +138,7 @@ class ARDroneATClient:
     def flat_trim(self) -> None:
         self._send([self._command("FTRIM")])
 
-    def takeoff(self, repeat: int = 18, interval_seconds: float = 0.03) -> None:
+    def takeoff(self, repeat: int = 60, interval_seconds: float = 0.03) -> None:
         self.init_navdata(repeat=1)
         self.flat_trim()
         for _ in range(repeat):
@@ -147,7 +149,7 @@ class ARDroneATClient:
                 ]
             )
             time.sleep(interval_seconds)
-        self.hover(repeat=8)
+        self.hover(repeat=20)
 
     def hover(self, repeat: int = 10, interval_seconds: float = 0.03) -> None:
         for _ in range(repeat):
@@ -159,7 +161,7 @@ class ARDroneATClient:
             )
             time.sleep(interval_seconds)
 
-    def land(self, repeat: int = 12, interval_seconds: float = 0.03) -> None:
+    def land(self, repeat: int = 30, interval_seconds: float = 0.03) -> None:
         for _ in range(repeat):
             self._send(
                 [
@@ -177,6 +179,16 @@ class ARDroneATClient:
                 self._command("REF", REF_LAND),
             ]
         )
+
+    def reset_emergency(self, repeat: int = 8, interval_seconds: float = 0.03) -> None:
+        for _ in range(repeat):
+            self._send(
+                [
+                    self._command("REF", REF_EMERGENCY),
+                    self._command("COMWDG"),
+                ]
+            )
+            time.sleep(interval_seconds)
 
 
 def local_address_for(host: str, port: int = CONTROL_PORT) -> str | None:
@@ -367,12 +379,19 @@ def send_real_drone_command(
     host: str,
     action: str,
 ) -> RealDroneCommandResult:
-    if action not in {"flat_trim", "takeoff", "pause", "land", "emergency_land"}:
+    if action not in {
+        "flat_trim",
+        "takeoff",
+        "pause",
+        "land",
+        "emergency_land",
+        "reset_emergency",
+    }:
         return RealDroneCommandResult(
             False,
             f"Drone command blocked: {action.replace('_', ' ')} is not enabled yet.",
             action,
-            "Only flat trim, guarded takeoff, hover, land, and emergency stop are enabled in real mode.",
+            "Only flat trim, clear emergency, guarded takeoff, hover, land, and emergency stop are enabled in real mode.",
             event_kind="drone_real_command_blocked",
         )
 
@@ -409,6 +428,14 @@ def send_real_drone_command(
                 "Drone land command sent.",
                 action,
                 "AT*REF land command repeated on UDP 5556.",
+            )
+        if action == "reset_emergency":
+            client.reset_emergency()
+            return RealDroneCommandResult(
+                True,
+                "Drone emergency state clear command sent.",
+                action,
+                "AT*REF emergency bit was repeated on UDP 5556 to clear the emergency latch.",
             )
 
         client.emergency_stop()
