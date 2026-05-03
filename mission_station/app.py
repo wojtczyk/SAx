@@ -321,7 +321,7 @@ def execute_drone_action(
     command_mode: str,
     drone_host: str,
 ) -> None:
-    if command_mode == "Real AR.Drone":
+    if command_mode == "Drone":
         result = send_real_drone_command(drone_host, action)
         if action == "land" and result.ok:
             st.session_state.drone_state = DroneState.DISARMED.value
@@ -430,11 +430,11 @@ def render_drone_controls(
     current_state = DroneState(st.session_state.drone_state)
     command_mode = st.radio(
         "Command mode",
-        ["Simulation", "Real AR.Drone"],
+        ["Simulation", "Drone"],
         key="drone_command_mode",
         horizontal=True,
     )
-    real_mode = command_mode == "Real AR.Drone"
+    real_mode = command_mode == "Drone"
     st.metric("Simulation state", current_state.value)
     if real_mode:
         st.warning("Real mode only enables Flat Trim, Land, and Emergency Stop.")
@@ -490,80 +490,66 @@ def render_drone_controls(
 
 
 def render_drone_diagnostics(store: EventStore):
-    st.subheader("AR.Drone Link")
-    drone_host = st.text_input("Drone host", key="drone_host")
-    st.caption(f"Video source: `{video_source_url(drone_host)}`")
-    telemetry_slot = st.empty()
+    with st.expander("Drone Link", expanded=True):
+        drone_host = st.text_input("Drone host", key="drone_host")
+        st.caption(f"Video source: `{video_source_url(drone_host)}`")
 
-    if st.button("Probe AR.Drone", width="stretch"):
-        result = probe_drone(drone_host)
-        st.session_state.drone_probe = {
-            "host": result["host"],
-            "local_address": result["local_address"],
-            "likely_on_drone_network": result["likely_on_drone_network"],
-            "video_source": result["video_source"],
-            "video": result["video"].__dict__,
-            "navdata": result["navdata"].__dict__,
-            "control": result["control"].__dict__,
-            "battery": result["battery"].__dict__,
-            "navdata_snapshot": result["battery"].__dict__,
-            "ready_for_video": result["ready_for_video"],
-            "ready_for_control": result["ready_for_control"],
-        }
-        store.add(
-            "drone_probe",
-            (
-                "AR.Drone probe: "
-                f"video={'ready' if result['ready_for_video'] else 'not ready'}, "
-                f"control={'ready' if result['ready_for_control'] else 'not ready'}"
-            ),
-            st.session_state.drone_probe,
-        )
+        if st.button("Probe Drone", width="stretch"):
+            result = probe_drone(drone_host)
+            st.session_state.drone_probe = {
+                "host": result["host"],
+                "local_address": result["local_address"],
+                "likely_on_drone_network": result["likely_on_drone_network"],
+                "video_source": result["video_source"],
+                "video": result["video"].__dict__,
+                "navdata": result["navdata"].__dict__,
+                "control": result["control"].__dict__,
+                "battery": result["battery"].__dict__,
+                "navdata_snapshot": result["battery"].__dict__,
+                "ready_for_video": result["ready_for_video"],
+                "ready_for_control": result["ready_for_control"],
+            }
+            store.add(
+                "drone_probe",
+                (
+                    "Drone probe: "
+                    f"video={'ready' if result['ready_for_video'] else 'not ready'}, "
+                    f"control={'ready' if result['ready_for_control'] else 'not ready'}"
+                ),
+                st.session_state.drone_probe,
+            )
+            if result["ready_for_video"]:
+                st.session_state.camera_source = result["video_source"]
+            st.rerun()
+
+        telemetry_slot = st.empty()
+        result = st.session_state.get("drone_probe")
+        if not result:
+            return telemetry_slot
+
+        st.write(f"Local route address: `{result['local_address']}`")
+        if not result["likely_on_drone_network"]:
+            st.warning("Mac does not appear to be on the AR.Drone Wi-Fi network.")
+
+        for key in ["video", "navdata", "control"]:
+            probe = result[key]
+            status = "OK" if probe["ok"] else "FAIL"
+            st.write(f"{status} · {probe['name']} · {probe['detail']}")
+
         if result["ready_for_video"]:
-            st.session_state.camera_source = result["video_source"]
-        st.rerun()
+            st.success("Video port is open. Switch to Server video source and press Start.")
+        else:
+            st.warning("Connect Mac Wi-Fi to the AR.Drone network, then probe again.")
 
-    result = st.session_state.get("drone_probe")
-    if not result:
+        render_navdata_snapshot(telemetry_slot, current_navdata_snapshot())
+
+        if st.session_state.running and is_drone_video_source(
+            st.session_state.camera_source,
+            drone_host,
+        ):
+            st.caption("Telemetry auto-refreshes while the drone video stream is running.")
+
         return telemetry_slot
-
-    render_navdata_snapshot(telemetry_slot, current_navdata_snapshot())
-
-    if st.button("Read Navdata", width="stretch"):
-        snapshot = read_navdata_snapshot(drone_host, initialize=True)
-        store_navdata_snapshot(snapshot, replace_failed=True)
-        store.add(
-            "drone_navdata",
-            (
-                f"AR.Drone navdata: battery {snapshot.battery_percent}%, altitude {snapshot.altitude_cm} cm"
-                if snapshot.ok
-                else f"AR.Drone navdata unavailable: {snapshot.detail}"
-            ),
-            snapshot.__dict__,
-        )
-        st.rerun()
-
-    if st.session_state.running and is_drone_video_source(
-        st.session_state.camera_source,
-        drone_host,
-    ):
-        st.caption("Telemetry auto-refreshes while the drone video stream is running.")
-
-    st.write(f"Local route address: `{result['local_address']}`")
-    if not result["likely_on_drone_network"]:
-        st.warning("Mac does not appear to be on the AR.Drone Wi-Fi network.")
-
-    for key in ["video", "navdata", "control"]:
-        probe = result[key]
-        status = "OK" if probe["ok"] else "FAIL"
-        st.write(f"{status} · {probe['name']} · {probe['detail']}")
-
-    if result["ready_for_video"]:
-        st.success("Video port is open. Switch to Server video source and press Start.")
-    else:
-        st.warning("Connect Mac Wi-Fi to the AR.Drone network, then probe again.")
-
-    return telemetry_slot
 
 
 def log_detections(
