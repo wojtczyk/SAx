@@ -8,9 +8,11 @@ import cv2
 import numpy as np
 import streamlit as st
 
+from sax_station.commands import ParsedCommand, parse_command
 from sax_station.detector import Detection, YoloDetector
 from sax_station.drone import DroneState, assisted_search_sequence, command
 from sax_station.events import EventStore
+from sax_station.exporter import export_mission_report
 from sax_station.profiles import DEFAULT_PROFILE_NAME, MISSION_PROFILES, MissionProfile, get_profile
 from sax_station.sitrep import generate_sitrep
 from sax_station.speech import SpeechRecorder, TranscriptionUnavailable
@@ -18,7 +20,45 @@ from sax_station.speech import SpeechRecorder, TranscriptionUnavailable
 
 APP_ROOT = Path(__file__).resolve().parent
 DATA_DIR = APP_ROOT / "data"
+EXPORT_DIR = APP_ROOT / "exports"
 DATA_DIR.mkdir(exist_ok=True)
+
+
+def apply_compact_layout() -> None:
+    st.markdown(
+        """
+        <style>
+        .block-container {
+            padding-top: 3.1rem !important;
+            padding-bottom: 1rem !important;
+        }
+
+        [data-testid="stSidebarContent"] {
+            padding-top: 1rem !important;
+        }
+
+        h1 {
+            margin-top: 0;
+            margin-bottom: 0.4rem;
+            line-height: 1;
+        }
+
+        h2, h3 {
+            margin-top: 0.35rem;
+            margin-bottom: 0.45rem;
+            line-height: 1.1;
+        }
+
+        .sax-title {
+            font-size: 1.65rem;
+            font-weight: 750;
+            line-height: 1;
+            margin: 0 0 0.3rem 0;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def init_state() -> None:
@@ -82,23 +122,110 @@ def render_sitrep(store: EventStore, profile: MissionProfile) -> None:
         st.caption("Generate a SITREP after capturing detections or notes.")
 
 
-def render_drone_controls(store: EventStore) -> None:
+def render_mission_export(
+    store: EventStore,
+    profile: MissionProfile,
+    video_source: str,
+    model_name: str,
+    confidence: float,
+) -> None:
+    st.subheader("Mission Export")
+    if st.button("Export Mission Report", width="stretch"):
+        path = export_mission_report(
+            EXPORT_DIR,
+            store.recent(limit=200),
+            profile,
+            st.session_state.drone_state,
+            video_source,
+            model_name,
+            confidence,
+            st.session_state.latest_sitrep,
+        )
+        st.session_state.latest_export = str(path)
+
+    latest_export = st.session_state.get("latest_export")
+    if latest_export:
+        st.caption(f"Saved: {latest_export}")
+
+
+def execute_drone_action(store: EventStore, action: str) -> None:
+    if action == "assisted_search":
+        for result in assisted_search_sequence():
+            st.session_state.drone_state = result.state.value
+            store.add(
+                result.event_kind,
+                result.summary,
+                {
+                    "simulated": True,
+                    "action": "assisted_search",
+                    "state": result.state.value,
+                },
+            )
+        return
+
+    result = command(DroneState(st.session_state.drone_state), action)
+    st.session_state.drone_state = result.state.value
+    store.add(
+        result.event_kind,
+        result.summary,
+        {
+            "simulated": True,
+            "action": action,
+            "state": result.state.value,
+        },
+    )
+
+
+def execute_operator_command(
+    store: EventStore,
+    profile: MissionProfile,
+    parsed: ParsedCommand,
+    source: str,
+) -> None:
+    if parsed.intent == "empty":
+        return
+
+    if parsed.intent in {"arm", "takeoff", "scan", "pause", "land", "emergency_land", "assisted_search"}:
+        execute_drone_action(store, parsed.intent)
+        store.add(
+            "operator_command",
+            f"{source} command executed: {parsed.intent.replace('_', ' ')}",
+            {"source": source, "intent": parsed.intent},
+        )
+        return
+
+    if parsed.intent == "sitrep":
+        st.session_state.latest_sitrep = generate_sitrep(store.recent(limit=30), profile)
+        store.add(
+            "operator_command",
+            f"{source} command executed: generate sitrep",
+            {"source": source, "intent": parsed.intent},
+        )
+        return
+
+    if parsed.intent == "note":
+        if parsed.value:
+            store.add(
+                "operator_note",
+                parsed.value,
+                {"source": source, "intent": parsed.intent},
+            )
+        return
+
+    store.add(
+        "operator_command",
+        f"{source} command not recognized: {parsed.value}",
+        {"source": source, "intent": parsed.intent, "raw": parsed.value},
+    )
+
+
+def render_drone_controls(store: EventStore, profile: MissionProfile) -> None:
     st.subheader("Drone Control")
     current_state = DroneState(st.session_state.drone_state)
     st.metric("Simulation state", current_state.value)
 
     def run_command(action: str) -> None:
-        result = command(DroneState(st.session_state.drone_state), action)
-        st.session_state.drone_state = result.state.value
-        store.add(
-            result.event_kind,
-            result.summary,
-            {
-                "simulated": True,
-                "action": action,
-                "state": result.state.value,
-            },
-        )
+        execute_drone_action(store, action)
         st.rerun()
 
     cols = st.columns(2)
@@ -120,17 +247,23 @@ def render_drone_controls(store: EventStore) -> None:
         run_command("emergency_land")
 
     if st.button("Run Assisted Search", width="stretch"):
-        for result in assisted_search_sequence():
-            st.session_state.drone_state = result.state.value
-            store.add(
-                result.event_kind,
-                result.summary,
-                {
-                    "simulated": True,
-                    "action": "assisted_search",
-                    "state": result.state.value,
-                },
-            )
+        execute_drone_action(store, "assisted_search")
+        st.rerun()
+
+    with st.form("operator_command_form", clear_on_submit=True):
+        command_text = st.text_input(
+            "Command",
+            placeholder="arm, takeoff, scan, sitrep, note possible survivor...",
+        )
+        submitted = st.form_submit_button("Run Command", width="stretch")
+
+    if submitted and command_text.strip():
+        execute_operator_command(
+            store,
+            profile,
+            parse_command(command_text),
+            source="typed",
+        )
         st.rerun()
 
     st.caption("Simulation only. Real AR.Drone commands will be wired after video/control tests.")
@@ -244,13 +377,14 @@ def open_capture(source: str) -> cv2.VideoCapture:
 
 def main() -> None:
     st.set_page_config(page_title="SAx", layout="wide")
+    apply_compact_layout()
     init_state()
 
     store = EventStore(DATA_DIR / "events.sqlite3")
     detector = YoloDetector()
     recorder = SpeechRecorder(DATA_DIR)
 
-    st.title("SAx")
+    st.markdown('<div class="sax-title">SAx</div>', unsafe_allow_html=True)
 
     with st.sidebar:
         st.header("Mission")
@@ -312,7 +446,7 @@ def main() -> None:
     detections_slot = intel_col.empty()
 
     with intel_col:
-        render_drone_controls(store)
+        render_drone_controls(store, profile)
 
         st.subheader("Operator Notes")
         typed_note = st.text_area("Manual note", placeholder="Possible movement near the entrance...")
@@ -326,6 +460,12 @@ def main() -> None:
                 audio_path = recorder.record(record_seconds)
                 transcript = recorder.transcribe(audio_path)
                 store.add("voice_note", transcript, {"audio_path": str(audio_path)})
+                execute_operator_command(
+                    store,
+                    profile,
+                    parse_command(transcript),
+                    source="voice",
+                )
                 st.success(transcript)
             except TranscriptionUnavailable as exc:
                 st.warning(str(exc))
@@ -333,6 +473,7 @@ def main() -> None:
                 st.error(f"Could not record/transcribe audio: {exc}")
 
         render_sitrep(store, profile)
+        render_mission_export(store, profile, source, model_name, confidence)
         render_timeline(store)
 
     if input_mode == "Browser snapshot":
