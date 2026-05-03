@@ -395,9 +395,10 @@ def navdata_readings(snapshot: dict | None) -> dict[str, str]:
     if battery is not None:
         readings["battery"] = f"{battery}%"
 
-    altitude_cm = snapshot.get("altitude_cm")
-    if altitude_cm is not None:
-        readings["altitude"] = f"{altitude_cm / 100:.2f} m"
+    altitude_raw = snapshot.get("altitude_cm")
+    if altitude_raw is not None:
+        # AR.Drone navdata demo altitude is reported in millimeters.
+        readings["altitude"] = f"{altitude_raw / 1000:.2f} m"
 
     drone_state = snapshot.get("drone_state")
     if drone_state is not None:
