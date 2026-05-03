@@ -386,6 +386,7 @@ def navdata_readings(snapshot: dict | None) -> dict[str, str]:
         "altitude": "unknown",
         "state": "unknown",
         "yaw": "unknown",
+        "speed": "unknown",
         "velocity": "unknown",
     }
     if not snapshot or not snapshot.get("ok"):
@@ -424,10 +425,13 @@ def navdata_readings(snapshot: dict | None) -> dict[str, str]:
         snapshot.get("vz"),
     )
     if all(value is not None for value in velocity):
+        vx_mps, vy_mps, vz_mps = (value / 1000 for value in velocity)
+        speed_mps = (vx_mps**2 + vy_mps**2 + vz_mps**2) ** 0.5
+        readings["speed"] = f"{speed_mps:.2f} m/s"
         readings["velocity"] = (
-            f"{velocity[0] / 1000:.2f}, "
-            f"{velocity[1] / 1000:.2f}, "
-            f"{velocity[2] / 1000:.2f} m/s"
+            f"{vx_mps:.2f}, "
+            f"{vy_mps:.2f}, "
+            f"{vz_mps:.2f} m/s"
         )
 
     return readings
@@ -501,6 +505,7 @@ def render_status_strip(
         ("Drone", drone_status),
         ("Battery", readings["battery"]),
         ("Altitude", readings["altitude"]),
+        ("Velocity", readings["speed"]),
         ("Video", video_status),
         ("Objects", object_status),
     ]

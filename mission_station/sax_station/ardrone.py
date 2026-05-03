@@ -18,18 +18,19 @@ NUDGE_FORWARD_SPEED = 0.08
 NUDGE_BACK_SPEED = 0.12
 NUDGE_ROLL_SPEED = 0.14
 NUDGE_VERTICAL_SPEED = 0.18
-NUDGE_YAW_SPEED = 0.28
+NUDGE_YAW_SPEED = 0.36
 NUDGE_REPEAT = 9
 NUDGE_INTERVAL_SECONDS = 0.03
-SCAN_STEPS = ("yaw_left", "yaw_right", "yaw_right", "yaw_left")
-ASSISTED_SEARCH_STEPS = (
-    "yaw_left",
-    "yaw_right",
-    "move_forward",
-    "yaw_left",
-    "yaw_right",
-    "move_back",
-)
+YAW_TARGET_DEGREES = 12.0
+YAW_TOLERANCE_DEGREES = 1.5
+YAW_TIMEOUT_SECONDS = 3.0
+YAW_CONTROL_REPEAT = 4
+SCAN_YAW_DEGREES = 15.0
+SCAN_YAW_TIMEOUT_SECONDS = 3.0
+SCAN_PAUSE_SECONDS = 0.2
+AUTONOMOUS_FORWARD_SPEED = 0.10
+AUTONOMOUS_BACK_SPEED = 0.12
+AUTONOMOUS_TRANSLATE_REPEAT = NUDGE_REPEAT * 10
 REF_LAND = 290717696
 REF_TAKEOFF = 290718208
 REF_EMERGENCY = 290717952
@@ -61,6 +62,10 @@ def next_at_sequence() -> int:
 
 def float_arg(value: float) -> int:
     return struct.unpack("<i", struct.pack("<f", float(value)))[0]
+
+
+def angle_delta_degrees(start: float, current: float) -> float:
+    return (current - start + 180) % 360 - 180
 
 
 @dataclass(frozen=True)
@@ -250,29 +255,90 @@ class ARDroneATClient:
             self.move(gaz=-NUDGE_VERTICAL_SPEED)
             return
         if action == "yaw_left":
-            self.move(yaw=-NUDGE_YAW_SPEED)
+            self.yaw_degrees(-YAW_TARGET_DEGREES)
             return
         if action == "yaw_right":
-            self.move(yaw=NUDGE_YAW_SPEED)
+            self.yaw_degrees(YAW_TARGET_DEGREES)
             return
 
         raise ValueError(f"unknown nudge action: {action}")
 
-    def run_nudge_sequence(
+    def read_yaw_degrees(self, timeout_seconds: float = 0.18) -> float | None:
+        snapshot = read_navdata_snapshot(
+            self.host,
+            timeout_seconds=timeout_seconds,
+            initialize=False,
+        )
+        return snapshot.yaw_degrees if snapshot.ok else None
+
+    def yaw_degrees(
         self,
-        steps: tuple[str, ...],
-        pause_seconds: float = 0.12,
+        target_delta_degrees: float,
+        timeout_seconds: float = YAW_TIMEOUT_SECONDS,
     ) -> None:
-        for step in steps:
-            self.nudge(step)
-            time.sleep(pause_seconds)
+        start_yaw = self.read_yaw_degrees(timeout_seconds=0.3)
+        direction = 1 if target_delta_degrees >= 0 else -1
+        target = abs(target_delta_degrees)
+
+        if start_yaw is None:
+            self.move(
+                yaw=direction * NUDGE_YAW_SPEED,
+                repeat=NUDGE_REPEAT,
+                hover_after=True,
+            )
+            return
+
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            self.move(
+                yaw=direction * NUDGE_YAW_SPEED,
+                repeat=YAW_CONTROL_REPEAT,
+                hover_after=False,
+            )
+
+            current_yaw = self.read_yaw_degrees(timeout_seconds=0.16)
+            if current_yaw is None:
+                continue
+
+            current_delta = abs(angle_delta_degrees(start_yaw, current_yaw))
+            if current_delta >= max(0.0, target - YAW_TOLERANCE_DEGREES):
+                break
+
+        self.hover(repeat=6)
+
+    def yaw_scan(self) -> None:
+        # Left, center, right, center. Each turn is relative to the
+        # heading reached by the previous step, so wraparound is handled by
+        # yaw_degrees().
+        for delta in (
+            -SCAN_YAW_DEGREES,
+            SCAN_YAW_DEGREES,
+            SCAN_YAW_DEGREES,
+            -SCAN_YAW_DEGREES,
+        ):
+            self.yaw_degrees(
+                delta,
+                timeout_seconds=SCAN_YAW_TIMEOUT_SECONDS,
+            )
+            time.sleep(SCAN_PAUSE_SECONDS)
         self.hover(repeat=6)
 
     def scan(self) -> None:
-        self.run_nudge_sequence(SCAN_STEPS)
+        self.yaw_scan()
 
     def assisted_search(self) -> None:
-        self.run_nudge_sequence(ASSISTED_SEARCH_STEPS)
+        self.yaw_scan()
+        self.move(
+            pitch=-AUTONOMOUS_FORWARD_SPEED,
+            repeat=AUTONOMOUS_TRANSLATE_REPEAT,
+        )
+        time.sleep(SCAN_PAUSE_SECONDS)
+        self.yaw_scan()
+        self.move(
+            pitch=AUTONOMOUS_BACK_SPEED,
+            repeat=AUTONOMOUS_TRANSLATE_REPEAT,
+        )
+        self.hover(repeat=6)
 
     def land(self, repeat: int = 30, interval_seconds: float = 0.03) -> None:
         for _ in range(repeat):
@@ -549,6 +615,13 @@ def send_real_drone_command(
             )
         if action in nudge_actions:
             client.nudge(action)
+            if action in {"yaw_left", "yaw_right"}:
+                return RealDroneCommandResult(
+                    True,
+                    f"Drone {action.replace('_', ' ')} closed-loop command sent.",
+                    action,
+                    f"Closed-loop yaw target: {YAW_TARGET_DEGREES:.0f} degrees, timeout: {YAW_TIMEOUT_SECONDS:.1f}s, followed by zero-motion hover.",
+                )
             return RealDroneCommandResult(
                 True,
                 f"Drone {action.replace('_', ' ')} nudge sent.",
@@ -561,7 +634,7 @@ def send_real_drone_command(
                 True,
                 "Drone scan pattern sent.",
                 action,
-                "Stationary yaw sweep sent as short AT*PCMD pulses, followed by zero-motion hover.",
+                "Closed-loop 15-degree yaw scan sent: left, center, right, center, followed by zero-motion hover.",
             )
         if action == "assisted_search":
             client.assisted_search()
@@ -569,7 +642,7 @@ def send_real_drone_command(
                 True,
                 "Drone autonomous search pattern sent.",
                 action,
-                "Conservative scan-forward-scan-back pattern sent as short AT*PCMD pulses, followed by zero-motion hover.",
+                "Conservative closed-loop 15-degree scan, 10x-duration forward leg, 15-degree scan, 10x-duration back leg sent, followed by zero-motion hover.",
             )
         if action == "land":
             client.land()
