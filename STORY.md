@@ -34,6 +34,7 @@ Disaster response and national security teams often work in places where normal 
 SAx turns raw observations into structured mission intelligence:
 
 - Drone or camera video provides local eyes on the scene.
+- Simulated assisted-search controls show the intended human-supervised autonomy flow.
 - YOLO detects people, vehicles, supplies, obstacles, and other objects of interest.
 - Speech-to-text captures hands-free operator notes.
 - A local event timeline keeps detections and notes organized.

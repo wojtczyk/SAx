@@ -8,6 +8,7 @@ Phase 1 Python prototype for a Mac-based edge mission station:
 - Speech-to-text operator notes
 - Offline SITREP generation from recent detections and notes
 - Mission profiles for Search And Rescue, Detect, Track, Map, and Protect workflows
+- Simulated drone control and Assisted Search mission logging
 - A path to swap webcam input for Parrot AR.Drone video
 
 ## Runtime

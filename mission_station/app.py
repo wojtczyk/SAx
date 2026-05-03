@@ -9,6 +9,7 @@ import numpy as np
 import streamlit as st
 
 from sax_station.detector import Detection, YoloDetector
+from sax_station.drone import DroneState, assisted_search_sequence, command
 from sax_station.events import EventStore
 from sax_station.profiles import DEFAULT_PROFILE_NAME, MISSION_PROFILES, MissionProfile, get_profile
 from sax_station.sitrep import generate_sitrep
@@ -26,6 +27,7 @@ def init_state() -> None:
     st.session_state.setdefault("camera_source", "0")
     st.session_state.setdefault("latest_sitrep", "")
     st.session_state.setdefault("mission_profile", DEFAULT_PROFILE_NAME)
+    st.session_state.setdefault("drone_state", DroneState.DISARMED.value)
 
 
 def parse_source(raw: str) -> int | str:
@@ -78,6 +80,60 @@ def render_sitrep(store: EventStore, profile: MissionProfile) -> None:
         )
     else:
         st.caption("Generate a SITREP after capturing detections or notes.")
+
+
+def render_drone_controls(store: EventStore) -> None:
+    st.subheader("Drone Control")
+    current_state = DroneState(st.session_state.drone_state)
+    st.metric("Simulation state", current_state.value)
+
+    def run_command(action: str) -> None:
+        result = command(DroneState(st.session_state.drone_state), action)
+        st.session_state.drone_state = result.state.value
+        store.add(
+            result.event_kind,
+            result.summary,
+            {
+                "simulated": True,
+                "action": action,
+                "state": result.state.value,
+            },
+        )
+        st.rerun()
+
+    cols = st.columns(2)
+    if cols[0].button("Arm", width="stretch"):
+        run_command("arm")
+    if cols[1].button("Takeoff", width="stretch"):
+        run_command("takeoff")
+
+    cols = st.columns(2)
+    if cols[0].button("Scan", width="stretch"):
+        run_command("scan")
+    if cols[1].button("Pause", width="stretch"):
+        run_command("pause")
+
+    cols = st.columns(2)
+    if cols[0].button("Land", width="stretch"):
+        run_command("land")
+    if cols[1].button("Emergency Land", width="stretch"):
+        run_command("emergency_land")
+
+    if st.button("Run Assisted Search", width="stretch"):
+        for result in assisted_search_sequence():
+            st.session_state.drone_state = result.state.value
+            store.add(
+                result.event_kind,
+                result.summary,
+                {
+                    "simulated": True,
+                    "action": "assisted_search",
+                    "state": result.state.value,
+                },
+            )
+        st.rerun()
+
+    st.caption("Simulation only. Real AR.Drone commands will be wired after video/control tests.")
 
 
 def log_detections(
@@ -256,6 +312,8 @@ def main() -> None:
     detections_slot = intel_col.empty()
 
     with intel_col:
+        render_drone_controls(store)
+
         st.subheader("Operator Notes")
         typed_note = st.text_area("Manual note", placeholder="Possible movement near the entrance...")
         if st.button("Add note", width="stretch", disabled=not typed_note.strip()):
