@@ -15,6 +15,7 @@ DRONE_INTENTS = {
     "scan",
     "pause",
     "land",
+    "flat_trim",
     "emergency_land",
     "assisted_search",
 }
@@ -40,9 +41,11 @@ def parse_command(raw: str) -> ParsedCommand:
         return ParsedCommand("scan")
     if text in {"pause", "hold", "hover"}:
         return ParsedCommand("pause")
+    if text in {"flat trim", "flat_trim", "trim", "calibrate"}:
+        return ParsedCommand("flat_trim")
     if text in {"land", "land drone"}:
         return ParsedCommand("land")
-    if text in {"emergency land", "emergency landing", "abort", "kill"}:
+    if text in {"emergency land", "emergency landing", "emergency stop", "abort"}:
         return ParsedCommand("emergency_land")
     if text in {"assisted search", "run assisted search", "start assisted search"}:
         return ParsedCommand("assisted_search")

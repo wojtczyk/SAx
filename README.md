@@ -15,7 +15,7 @@ Phase 1 Python prototype for a Mac-based edge mission station:
 
 ## Runtime
 
-Use Python 3.11 or 3.12. The default `python3` on this machine is currently 3.14, which is ahead of the versions most CV/ML packages support reliably.
+Use Python 3.11 or 3.12.
 
 ## Setup
 
@@ -52,6 +52,17 @@ If the video probe succeeds, use this source in the app with **Server video sour
 tcp://192.168.1.1:5555
 ```
 
+The AR.Drone Link panel can also read battery level and altitude from navdata on UDP `5554`.
+
+## AR.Drone Command Safety
+
+The app includes a **Command mode** selector in the Drone Control panel:
+
+- **Simulation**: all drone actions are logged only as simulated events.
+- **Real AR.Drone**: only `Flat Trim`, `Land`, and `Emergency Stop` are enabled.
+
+Real takeoff, movement, and assisted search remain disabled until the command path is proven safe. `Emergency Stop` sends the AR.Drone emergency motor-cut sequence and can cause a crash if the drone is airborne.
+
 ## macOS Camera Notes
 
 The app has two input modes:
@@ -68,7 +79,7 @@ Could not open video source: 0
 macOS probably denied camera access to the Python process. For webcam testing, switch to `Browser snapshot` mode. If you need live webcam capture through OpenCV, run Streamlit from Terminal or iTerm and grant camera permission to that app:
 
 ```bash
-cd /Users/martin/Projects/hack/sax
+cd ~/sax
 source .venv/bin/activate
 streamlit run mission_station/app.py
 ```

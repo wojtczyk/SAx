@@ -24,6 +24,25 @@ def main() -> None:
         status = "ok" if probe.ok else "failed"
         print(f"{probe.name}: {status} ({probe.detail})")
 
+    battery = result["battery"]
+    battery_text = f"{battery.battery_percent}%" if battery.ok else f"unavailable ({battery.detail})"
+    print(f"Battery: {battery_text}")
+    altitude_text = (
+        f"{battery.altitude_cm} cm ({battery.altitude_cm / 100:.2f} m)"
+        if battery.ok and battery.altitude_cm is not None
+        else f"unavailable ({battery.detail})"
+    )
+    print(f"Altitude: {altitude_text}")
+    print(f"Flying state: {battery.flying_state_name}")
+    heading_text = f"{battery.yaw_degrees:.1f} deg" if battery.yaw_degrees is not None else "unavailable"
+    print(f"Yaw/heading: {heading_text}")
+    velocity = battery.velocity_mps
+    velocity_text = (
+        f"vx={velocity[0]:.2f} m/s, vy={velocity[1]:.2f} m/s, vz={velocity[2]:.2f} m/s"
+        if velocity is not None
+        else "unavailable"
+    )
+    print(f"Velocity: {velocity_text}")
     print(f"Ready for video: {result['ready_for_video']}")
     print(f"Ready for control: {result['ready_for_control']}")
 
